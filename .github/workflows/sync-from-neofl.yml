@@ -1,40 +1,18 @@
-name: Sync NeoFL source
+name: NeoFL source sync (manual)
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
+# The neofl-gpt repository is an independently evolving product built from
+# the canonical NeoFL infrastructure. Automatic rsync was intentionally
+# removed because it deleted neofl-gpt extensions and caused recursive/failed
+# workflow runs. Source synchronization is now an explicit manual operation.
 
 jobs:
-  sync:
+  sync-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout target repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Clone canonical NeoFL
-        run: git clone --depth 1 https://github.com/neofinn/neofl.git /tmp/neofl-source
-
-      - name: Copy complete NeoFL infrastructure
+      - name: Check canonical source
         run: |
-          rsync -a --delete \
-            --exclude '.git/' \
-            --exclude '.github/workflows/sync-from-neofl.yml' \
-            /tmp/neofl-source/ ./
-
-      - name: Commit synchronized infrastructure
-        run: |
-          git config user.name "neofl-gpt sync"
-          git config user.email "neofl-gpt-sync@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "NeoFL source already synchronized."
-            exit 0
-          fi
-          git commit -m "Sync complete NeoFL infrastructure [skip ci]"
-          git push origin HEAD:main
+          git ls-remote https://github.com/neofinn/neofl.git HEAD
+          echo "Canonical NeoFL source is reachable. Manual sync is required to change this repository."
