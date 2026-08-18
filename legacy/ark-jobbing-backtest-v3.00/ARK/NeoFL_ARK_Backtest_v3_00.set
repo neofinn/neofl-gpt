@@ -1,0 +1,16 @@
+Lots=0.10
+StopLossPoints=800
+TakeProfitPoints=1600
+MaxPositions=1
+Magic=30001
+DeviationPoints=30
+USOpenHourET=9
+USOpenMinuteET=30
+USCloseHourET=16
+USCloseMinuteET=0
+FastEMA=20
+SlowEMA=50
+RSIPeriod=14
+RequireEMAConfirmation=true
+RequireM5CHoCH=true
+CloseOnOppositeBreak=true

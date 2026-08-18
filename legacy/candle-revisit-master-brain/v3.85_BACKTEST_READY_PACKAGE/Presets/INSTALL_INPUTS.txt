@@ -1,0 +1,22 @@
+NeoFL v3.85 BACKTEST INPUT CHECK
+
+Main entry hard maximum: 0.01 lot.
+Straddle max lot: 10.00 default (broker/safety cap; not a 0.01 cap).
+Straddle Safety Factor: 1.10 default.
+Straddle Profit Buffer: 1.00 USD default.
+Desired Basket Profit: 1.00 USD default.
+Straddle TP Factor: target-distance multiplier only; NEVER an independent
+straddle exit authority.
+
+Watch these Master Brain values in logs/dashboard during validation:
+STRADDLE_REQUIRED_MONEY
+STRADDLE_GAP_PRICE
+STRADDLE_GAP_MONEY_PER_LOT
+STRADDLE_REQUIRED_LOTS
+STRADDLE_LOTS
+STRADDLE_COVERAGE
+BASKET_PNL
+BASKET_BE_PRICE
+BASKET_TARGET_PRICE
+STRADDLE_BE_DISTANCE
+STRADDLE_TARGET_DISTANCE
