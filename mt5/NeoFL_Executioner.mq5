@@ -19,8 +19,6 @@ string g_server = "";
 bool   g_authorized = false;
 bool   g_execution_enabled = false;
 
-auto_unused_placeholder;
-
 string EnvironmentName(){ENUM_ACCOUNT_TRADE_MODE mode=(ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE);return mode==ACCOUNT_TRADE_MODE_DEMO ? "DEMO" : "LIVE";}
 string BaseURL(){string s=NeoFL_API_BASE_URL;while(StringLen(s)>0 && StringSubstr(s,StringLen(s)-1)=="/")s=StringSubstr(s,0,StringLen(s)-1);return s;}
 string JsonEscape(string value){StringReplace(value,"\\","\\\\");StringReplace(value,"\"","\\\"");return value;}
