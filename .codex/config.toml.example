@@ -1,0 +1,14 @@
+[mcp_servers.metaeditor]
+url = "http://127.0.0.1:22345/mcp"
+enabled = true
+http_headers = { "Authorization" = "Bearer ${NEOFL_META_MCP_TOKEN}" }
+
+[mcp_servers.terminal]
+url = "http://127.0.0.1:22346/mcp"
+enabled = true
+http_headers = { "Authorization" = "Bearer ${NEOFL_META_MCP_TOKEN}" }
+
+[mcp_servers.marketdata]
+url = "https://www.metatrader.com/mcp"
+enabled = true
+http_headers = { "Authorization" = "Bearer ${NEOFL_MARKETDATA_MCP_TOKEN}" }
