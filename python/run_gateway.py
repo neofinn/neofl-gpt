@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from neofl_gateway.agent import AgentLoop
+from neofl_gateway.agent import AgentLoop, sqlite_snapshot_observations
 from neofl_gateway.agentic import AgenticSoul
 from neofl_gateway.api import StateStore, build_default_api
 from neofl_gateway.bridge import Bridge, default_terminal_files
@@ -41,7 +41,10 @@ def main() -> int:
 
     reasoner = OpenAIReasoner()
     soul = AgenticSoul(reasoner=reasoner)
-    agent = AgentLoop(soul=soul)
+    agent = AgentLoop(
+        soul=soul,
+        context_provider=lambda symbol: sqlite_snapshot_observations(db.latest_snapshot(), symbol),
+    )
     api.create(
         "/agent/status",
         lambda q: {
@@ -50,8 +53,9 @@ def main() -> int:
             "model": reasoner.model if reasoner.enabled else None,
             "tools": soul.tools.names(),
             "execution_authorized": False,
+            "perception": "MT5 SQLite bridge snapshot",
         },
-        description="Agentic Soul state and reasoning provider.",
+        description="Agentic Soul state, perception and reasoning provider.",
     )
     api.create("/memory/health", lambda q: memory.status(), description="Durable Supabase memory status.", requires_auth=False)
 
@@ -81,6 +85,7 @@ def main() -> int:
     print(f"  auth          {'Bearer token required' if args.token else 'DISABLED (local only)'}")
     print(f"  persistence   {'SUPABASE enabled' if memory.enabled else 'local only (configure NEOFL_SUPABASE_URL + service key)'}")
     print(f"  reasoner      {'OpenAI ' + reasoner.model if reasoner.enabled else 'deterministic fail-closed fallback'}")
+    print("  perception    MT5 latest snapshot via SQLite bridge")
     print("  execution     DISABLED — Agentic Soul is recommendation-only")
     print()
     print("  Webhooks:")
