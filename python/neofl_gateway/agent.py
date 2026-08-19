@@ -62,13 +62,16 @@ class AgentLoop:
             except Exception:
                 context["episodic_memory"] = []
         state = self.soul.create_plan(text, symbol, request.mode, context)
+        # Preserve the routing decision made by the planner. AgenticSoul may
+        # re-plan and remove completed brain tasks, so deriving routing from the
+        # final task list would incorrectly report only the surviving tasks.
+        routed = [t.id.split(":", 1)[1] for t in state.tasks if t.id.startswith("brain:")]
+        if "Risk Brain" not in routed:
+            routed.append("Risk Brain")
         for item in context.get("observations") or []:
             if isinstance(item, dict):
                 state.observations.append(self._observation(item))
         state = self.soul.run(state, context)
-        routed = [t.id.split(":", 1)[1] for t in state.tasks if t.id.startswith("brain:")]
-        if "Risk Brain" not in routed:
-            routed.append("Risk Brain")
         return AgentResponse(
             request_id=state.request_id, status="accepted", mode=request.mode, routed_brains=routed,
             answer=self._answer(state, route, context), reasoning_state=state.phase, created_at=time.time(),
