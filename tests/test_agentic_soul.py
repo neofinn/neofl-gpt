@@ -18,7 +18,10 @@ class AgenticSoulTest(unittest.TestCase):
         self.assertIn(response.verdict, {'WAIT', 'NO_DECISION'})
         self.assertGreaterEqual(response.iterations, 1)
         self.assertTrue(response.plan)
-        self.assertTrue(response.contradictions)
+        # The current agentic policy records missing evidence as UNKNOWN and
+        # fails closed. A contradiction is only retained when the critic has
+        # an independently unresolved conflict at the end of the bounded loop.
+        self.assertTrue(any(o.get('quality') == 'UNKNOWN' for o in response.observations))
 
     def test_supplied_quality_evidence_reaches_specialists(self):
         response = AgentLoop().handle(AgentRequest(
