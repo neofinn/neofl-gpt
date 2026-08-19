@@ -2,8 +2,8 @@
 
 This module deliberately does not own broker execution. It turns a request into a
 bounded plan, gathers only available evidence, runs specialist/critic passes, and
-can re-plan when evidence is missing or contradictory. It is deterministic today
-and exposes clean seams for an LLM reasoner later.
+can re-plan when evidence is missing or contradictory. An optional LLM reasoner can
+synthesize the evidence; without it the deterministic fail-closed path remains active.
 """
 from __future__ import annotations
 
@@ -67,8 +67,6 @@ Tool = Callable[[AgentState, Task], Any]
 
 
 class WorkingMemory:
-    """Bounded per-request memory; no hidden mutable global state."""
-
     def __init__(self, limit: int = 200) -> None:
         self.limit = limit
         self._items: list[dict[str, Any]] = []
@@ -114,8 +112,9 @@ class AgenticSoul:
         "Market Structure Brain": ("structure", "trend", "break", "sweep", "liquidity", "support", "resistance"),
     }
 
-    def __init__(self, tools: ToolRegistry | None = None) -> None:
+    def __init__(self, tools: ToolRegistry | None = None, reasoner: Any | None = None) -> None:
         self.tools = tools or ToolRegistry()
+        self.reasoner = reasoner
         self._install_default_tools()
 
     def _install_default_tools(self) -> None:
@@ -172,6 +171,7 @@ class AgenticSoul:
             break
 
         state.phase = "DECIDING"
+        self._llm_synthesis(state)
         self._decide(state, context)
         state.phase = "RESOLVED" if state.final_verdict != "UNRESOLVED" else "BLOCKED"
         return state
@@ -214,6 +214,45 @@ class AgenticSoul:
         ))
         state.contradictions.clear()
 
+    def _llm_synthesis(self, state: AgentState) -> None:
+        if self.reasoner is None:
+            return
+        try:
+            result = self.reasoner.reason(
+                goal=state.goal,
+                symbol=state.symbol,
+                observations=[asdict(o) for o in state.observations],
+                hypotheses=[asdict(h) for h in state.hypotheses],
+                contradictions=state.contradictions,
+            )
+        except Exception:
+            result = None
+        if not isinstance(result, dict):
+            return
+        for item in result.get("hypotheses", []) or []:
+            if isinstance(item, dict):
+                try:
+                    state.hypotheses.append(Hypothesis(
+                        name=str(item.get("name", "LLM thesis")),
+                        thesis=str(item.get("thesis", "")),
+                        confidence=float(item.get("confidence", 0.0) or 0.0),
+                        evidence=[str(x) for x in item.get("evidence", [])],
+                        invalidators=[str(x) for x in item.get("invalidators", [])],
+                    ))
+                except (TypeError, ValueError):
+                    pass
+        for contradiction in result.get("contradictions", []) or []:
+            if str(contradiction) not in state.contradictions:
+                state.contradictions.append(str(contradiction))
+        for missing in result.get("missing_evidence", []) or []:
+            state.lessons.append(f"Missing evidence: {missing}")
+        llm_reason = str(result.get("reason", "")).strip()
+        llm_verdict = str(result.get("verdict", "")).upper()
+        if llm_verdict in {"RECOMMEND", "WAIT", "NO_DECISION"} and llm_reason:
+            state.context["llm_verdict"] = llm_verdict
+            state.context["llm_reason"] = llm_reason
+            state.context["llm_confidence"] = float(result.get("confidence", 0.0) or 0.0)
+
     def _decide(self, state: AgentState, context: dict[str, Any]) -> None:
         if not state.observations:
             state.final_verdict = "NO_DECISION"
@@ -228,6 +267,12 @@ class AgenticSoul:
             state.final_verdict = "WAIT"
             state.final_reason = "Required evidence remains unknown; fail-closed decision."
             return
+        llm_verdict = state.context.get("llm_verdict")
+        llm_reason = state.context.get("llm_reason")
+        if llm_verdict in {"RECOMMEND", "WAIT", "NO_DECISION"}:
+            state.final_verdict = llm_verdict
+            state.final_reason = llm_reason or "LLM reasoner supplied the bounded synthesis."
+            return
         if state.hypotheses:
             best = max(state.hypotheses, key=lambda h: h.confidence)
             state.final_verdict = "RECOMMEND" if best.confidence >= 0.60 else "WAIT"
@@ -239,16 +284,14 @@ class AgenticSoul:
     @staticmethod
     def _instrument_discovery(state: AgentState, task: Task) -> dict[str, Any]:
         route = classify_instrument(state.symbol)
-        return {
-            "observations": [{
-                "source": "instrument_classifier",
-                "claim": "signal_domain",
-                "value": route.signal_domain.value,
-                "quality": "OK" if route.signal_domain.value != "UNKNOWN" else "UNKNOWN",
-                "confidence": 1.0 if route.signal_domain.value != "UNKNOWN" else 0.2,
-                "evidence": [route.reason],
-            }]
-        }
+        return {"observations": [{
+            "source": "instrument_classifier",
+            "claim": "signal_domain",
+            "value": route.signal_domain.value,
+            "quality": "OK" if route.signal_domain.value != "UNKNOWN" else "UNKNOWN",
+            "confidence": 1.0 if route.signal_domain.value != "UNKNOWN" else 0.2,
+            "evidence": [route.reason],
+        }]}
 
     @staticmethod
     def _context_observation(state: AgentState, task: Task) -> dict[str, Any]:
@@ -279,8 +322,7 @@ class AgenticSoul:
         usable = [o for o in state.observations if o.quality in {"OK", "DATA_OK", "DELAYED", "DATA_DELAYED"}]
         if not usable:
             return {"observations": []}
-        confidence = sum(o.confidence for o in usable) / max(1, len(usable))
-        confidence = min(0.95, max(0.0, confidence))
+        confidence = min(0.95, max(0.0, sum(o.confidence for o in usable) / max(1, len(usable))))
         if brain == "Critic Brain":
             return {"observations": [], "contradictions": [
                 "Critic requires independent opposing evidence before declaring a thesis validated."
