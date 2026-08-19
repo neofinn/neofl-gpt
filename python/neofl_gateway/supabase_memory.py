@@ -1,10 +1,4 @@
-"""Optional durable NeoFL memory backed by Supabase REST.
-
-The gateway remains runnable locally without Supabase. When NEOFL_SUPABASE_URL and
-NEOFL_SUPABASE_SERVICE_ROLE_KEY are present, accepted requests, Soul decisions,
-brain events, experiments and learning events are mirrored to the NeoFL project.
-Service-role credentials are server-only and must never be exposed to the browser.
-"""
+"""Optional durable NeoFL memory backed by Supabase REST."""
 from __future__ import annotations
 
 import json
@@ -54,7 +48,7 @@ class SupabaseMemory:
         params = {"select": select, "limit": str(max(1, min(limit, 500)))}
         if order:
             params["order"] = order
-        url = f"{self.url}/rest/v1/{table}?{urllib.parse.urlencode(params, safe='(),:*')}"
+        url = f"{self.url}/rest/v1/{table}?{urllib.parse.urlencode(params, safe='(),:*') }"
         req = urllib.request.Request(url, method="GET", headers=self._headers())
         try:
             with urllib.request.urlopen(req, timeout=8) as response:
@@ -106,8 +100,38 @@ class SupabaseMemory:
             "payload": payload or {},
         })
 
+    @staticmethod
+    def _metadata_value(report: dict[str, Any], *keys: str) -> Any:
+        metadata = report.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            return None
+        for key in keys:
+            value = metadata.get(key)
+            if value not in (None, ""):
+                return value
+        return None
+
+    @staticmethod
+    def _same_position(position: dict[str, Any], ticket: str, symbol: str, direction: str) -> bool:
+        if not isinstance(position, dict):
+            return False
+        if ticket:
+            candidate = str(position.get("ticket") or position.get("order") or position.get("position_id") or "")
+            if candidate == ticket:
+                return True
+        if symbol and str(position.get("symbol") or "").upper() == symbol.upper():
+            pdir = str(position.get("direction") or position.get("type") or "").upper()
+            if not direction or pdir in {"", direction.upper(), f"POSITION_TYPE_{direction.upper()}"}:
+                return True
+        return False
+
     def execution_reports(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Return execution reports enriched with account and trade state."""
+        """Return canonical execution reports with account/trade/PnL enrichment.
+
+        The browser must never have to interpret raw UUIDs. Account identity comes
+        from gateway_accounts, with metadata fallbacks for older reports. Rejected
+        records retain both machine code and human-readable reason.
+        """
         reports = self._select(
             "gateway_execution_reports",
             "id,timestamp,intent_id,account_id,adapter,environment,status,filled_quantity,average_fill_price,realized_pnl,broker_order_id,rejection_code,rejection_reason,metadata",
@@ -118,79 +142,114 @@ class SupabaseMemory:
             "gateway_order_intents",
             "id,account_id,strategy,symbol,direction,order_type,quantity,entry,stop,target,time_in_force,thesis_id,risk_profile,metadata,status,created_at,completed_at",
             order="created_at.desc",
-            limit=min(limit * 2, 500),
+            limit=min(max(limit * 5, 100), 500),
         )
         accounts = self._select(
             "gateway_accounts",
             "id,account_number,connector,server,environment,label,ea_status,brain_connected,execution_enabled,balance,equity,profit,current_positions",
             limit=500,
         )
+
         intent_by_id = {str(x.get("id")): x for x in intents}
         account_by_id = {str(x.get("id")): x for x in accounts}
+        account_by_number = {str(x.get("account_number")): x for x in accounts if x.get("account_number") is not None}
 
         out: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
         for report in reports:
             intent = intent_by_id.get(str(report.get("intent_id")), {})
             account = account_by_id.get(str(report.get("account_id")), {})
+            metadata = report.get("metadata") or {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            account_number = account.get("account_number") or self._metadata_value(
+                report, "account_number", "mt5_account", "login"
+            )
+            if not account and account_number is not None:
+                account = account_by_number.get(str(account_number), {})
+            if not account and intent.get("account_id"):
+                account = account_by_id.get(str(intent.get("account_id")), {})
+            account_number = account.get("account_number") or account_number or "UNKNOWN"
+
+            status = str(report.get("status") or "").upper()
+            intent_status = str(intent.get("status") or "").upper()
+            symbol = str(intent.get("symbol") or metadata.get("symbol") or "")
+            direction = str(intent.get("direction") or metadata.get("direction") or "")
+            ticket = str(report.get("broker_order_id") or metadata.get("broker_order_id") or "")
+
             positions = account.get("current_positions") or []
             if isinstance(positions, dict):
                 positions = [positions]
-
-            ticket = str(report.get("broker_order_id") or "")
-            unrealized = None
             matched_position: dict[str, Any] | None = None
             for position in positions:
-                if not isinstance(position, dict):
-                    continue
-                candidate = str(position.get("ticket") or position.get("order") or position.get("position_id") or "")
-                if ticket and candidate == ticket:
+                if self._same_position(position, ticket, symbol, direction):
                     matched_position = position
                     break
+
+            unrealized = None
             if matched_position is not None:
                 unrealized = matched_position.get("profit")
                 if unrealized is None:
                     unrealized = matched_position.get("unrealized_pnl")
 
-            status = str(report.get("status") or "").upper()
+            realized = report.get("realized_pnl")
+            if realized is None:
+                realized = metadata.get("realized_pnl")
+
+            rejection_code = report.get("rejection_code") or metadata.get("rejection_code")
+            rejection_reason = (
+                report.get("rejection_reason")
+                or metadata.get("rejection_reason")
+                or metadata.get("error_description")
+                or metadata.get("result_retcode_description")
+                or ""
+            )
             if status in {"REJECTED", "DECLINED", "BLOCKED", "ERROR"}:
                 bucket = "REJECTED"
-            elif report.get("realized_pnl") is not None or status in {"CLOSED", "FILLED_CLOSED", "CANCELLED"}:
+            elif realized is not None or status in {"CLOSED", "FILLED_CLOSED", "CANCELLED"} or intent_status in {"CLOSED", "COMPLETED", "CANCELLED"} or intent.get("completed_at"):
                 bucket = "CLOSED"
             else:
                 bucket = "RUNNING"
 
+            # Defensive dedupe: a broken poller must not render the same signal repeatedly.
+            dedupe_key = (str(account_number), str(report.get("intent_id") or ""), status)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
             out.append({
                 "id": report.get("id"),
                 "timestamp": report.get("timestamp"),
-                "account_id": report.get("account_id"),
-                "account_number": account.get("account_number") or "UNKNOWN",
-                "broker": account.get("server") or account.get("connector") or "MT5",
-                "environment": report.get("environment") or account.get("environment"),
+                "account_id": report.get("account_id") or intent.get("account_id"),
+                "account_number": str(account_number),
+                "broker": account.get("server") or metadata.get("server") or account.get("connector") or report.get("adapter") or "MT5",
+                "environment": report.get("environment") or account.get("environment") or metadata.get("environment"),
                 "adapter": report.get("adapter"),
                 "status": status,
                 "bucket": bucket,
                 "intent_id": report.get("intent_id"),
                 "trade": {
-                    "strategy": intent.get("strategy"),
-                    "symbol": intent.get("symbol"),
-                    "direction": intent.get("direction"),
-                    "order_type": intent.get("order_type"),
-                    "quantity": intent.get("quantity"),
-                    "entry": intent.get("entry"),
-                    "stop": intent.get("stop"),
-                    "target": intent.get("target"),
-                    "time_in_force": intent.get("time_in_force"),
-                    "thesis_id": intent.get("thesis_id"),
+                    "strategy": intent.get("strategy") or metadata.get("strategy"),
+                    "symbol": symbol or None,
+                    "direction": direction or None,
+                    "order_type": intent.get("order_type") or metadata.get("order_type") or "MARKET",
+                    "quantity": intent.get("quantity") or metadata.get("quantity"),
+                    "entry": intent.get("entry") or metadata.get("entry"),
+                    "stop": intent.get("stop") or metadata.get("stop"),
+                    "target": intent.get("target") or metadata.get("target"),
+                    "time_in_force": intent.get("time_in_force") or metadata.get("time_in_force"),
+                    "thesis_id": intent.get("thesis_id") or metadata.get("thesis_id"),
                 },
                 "filled_quantity": report.get("filled_quantity"),
                 "average_fill_price": report.get("average_fill_price"),
-                "broker_order_id": report.get("broker_order_id"),
-                "unrealized_pnl": unrealized,
-                "realized_pnl": report.get("realized_pnl"),
-                "rejection_code": report.get("rejection_code"),
-                "rejection_reason": report.get("rejection_reason") or "",
+                "broker_order_id": report.get("broker_order_id") or metadata.get("broker_order_id"),
+                "unrealized_pnl": unrealized if bucket == "RUNNING" else None,
+                "realized_pnl": realized if bucket == "CLOSED" else None,
+                "rejection_code": rejection_code,
+                "rejection_reason": rejection_reason,
                 "position": matched_position,
-                "metadata": report.get("metadata") or {},
+                "metadata": metadata,
             })
         return out
 
