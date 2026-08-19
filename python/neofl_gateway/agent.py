@@ -1,53 +1,108 @@
+"""NeoFL Agentic Soul interface."""
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+import time
+from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
+from .agentic import AgenticSoul
+from .instrument_classification import classify_instrument
 
-@dataclass(frozen=True)
+@dataclass
 class AgentRequest:
-    symbol: str
-    question: str
-    as_of: str | None = None
-    snapshot: dict[str, Any] | None = None
+    text: str
+    symbol: str | None = None
+    mode: str = "analyze"
+    request_id: str | None = None
+    context: dict[str, Any] = field(default_factory=dict)
 
-
-@dataclass(frozen=True)
+@dataclass
 class AgentResponse:
-    symbol: str
+    request_id: str
+    status: str
+    mode: str
+    routed_brains: list[str]
     answer: str
-    observations: list[dict[str, Any]]
-    as_of: str
-
+    reasoning_state: str
+    created_at: float
+    safety: dict[str, Any]
+    instrument_route: dict[str, Any] | None = None
+    plan: list[dict[str, Any]] = field(default_factory=list)
+    observations: list[dict[str, Any]] = field(default_factory=list)
+    hypotheses: list[dict[str, Any]] = field(default_factory=list)
+    contradictions: list[str] = field(default_factory=list)
+    iterations: int = 0
+    verdict: str = "UNRESOLVED"
+    lessons: list[str] = field(default_factory=list)
 
 class AgentLoop:
-    """Small deterministic gateway loop for the NeoFL control room.
+    """Agentic Soul: goal -> plan -> observe -> specialist -> critic -> replan -> decide."""
+    def __init__(self, soul: AgenticSoul | None = None, context_provider: Callable[[str], list[dict[str, Any]]] | None = None, memory_provider: Callable[[str], list[dict[str, Any]]] | None = None) -> None:
+        self.soul = soul or AgenticSoul()
+        self.context_provider = context_provider
+        self.memory_provider = memory_provider
 
-    The gateway deliberately separates observation collection from answer
-    generation so the web control room can consume structured evidence.
-    """
+    def handle(self, request: AgentRequest) -> AgentResponse:
+        text = request.text.strip()
+        if not text:
+            raise ValueError("request text is required")
+        symbol = request.symbol or "UNSPECIFIED"
+        route = asdict(classify_instrument(request.symbol)) if request.symbol else None
+        context = dict(request.context or {})
+        context["request_id"] = request.request_id or f"neo-{int(time.time() * 1000)}"
+        if not context.get("observations") and self.context_provider and request.symbol:
+            try:
+                context["observations"] = self.context_provider(request.symbol) or []
+            except Exception:
+                context["observations"] = []
+        if self.memory_provider and request.symbol:
+            try:
+                context["episodic_memory"] = self.memory_provider(request.symbol) or []
+            except Exception:
+                context["episodic_memory"] = []
+        state = self.soul.create_plan(text, symbol, request.mode, context)
 
-    def __init__(self, observer: Callable[[AgentRequest], list[dict[str, Any]]] | None = None):
-        self.observer = observer or (lambda request: sqlite_snapshot_observations(request.snapshot, request.symbol))
+        # Routing is a property of the original plan, not the final task list.
+        # AgenticSoul can re-plan and remove completed brain tasks; reporting
+        # from state.tasks after run() would therefore lose the original brains.
+        routed: list[str] = []
+        for task in state.tasks:
+            if task.id.startswith("brain:"):
+                brain = task.id.split(":", 1)[1]
+                if brain not in routed:
+                    routed.append(brain)
+        if "Risk Brain" not in routed:
+            routed.append("Risk Brain")
 
-    def run(self, request: AgentRequest) -> AgentResponse:
-        observations = self.observer(request)
-        answer = self._compose_answer(request, observations)
+        for item in context.get("observations") or []:
+            if isinstance(item, dict):
+                state.observations.append(self._observation(item))
+        state = self.soul.run(state, context)
         return AgentResponse(
-            symbol=request.symbol,
-            answer=answer,
-            observations=observations,
-            as_of=request.as_of or datetime.now(timezone.utc).isoformat(),
+            request_id=state.request_id, status="accepted", mode=request.mode, routed_brains=routed,
+            answer=self._answer(state, route, context), reasoning_state=state.phase, created_at=time.time(),
+            safety={"execution_authorized": False, "live_trading": False, "requires_risk_gate": True, "broker_order_authority": False, "agentic_loop": True},
+            instrument_route=route, plan=[asdict(t) for t in state.tasks], observations=[asdict(o) for o in state.observations],
+            hypotheses=[asdict(h) for h in state.hypotheses], contradictions=state.contradictions, iterations=state.iteration,
+            verdict=state.final_verdict, lessons=state.lessons,
         )
 
     @staticmethod
-    def _compose_answer(request: AgentRequest, observations: list[dict[str, Any]]) -> str:
-        if not observations:
-            return f"No verified gateway observations are available for {request.symbol}."
-        return f"Verified gateway observations available for {request.symbol}: {len(observations)}."
+    def _observation(item: dict[str, Any]):
+        from .agentic import Observation
+        return Observation(source=str(item.get("source", "external")), claim=str(item.get("claim", "evidence")), value=item.get("value"), quality=str(item.get("quality", "UNKNOWN")), confidence=float(item.get("confidence", 0.0) or 0.0), evidence=[str(x) for x in item.get("evidence", [])])
 
+    @staticmethod
+    def _answer(state, route: dict[str, Any] | None, context: dict[str, Any]) -> str:
+        route_text = "" if not route else f" Instrument route: {route['signal_domain']}. {route['reason']}"
+        contradiction_text = "" if not state.contradictions else f" Contradictions: {'; '.join(state.contradictions[:3])}."
+        memory_text = " Prior episodic memory was supplied." if context.get("episodic_memory") else ""
+        return f"Soul completed an agentic analysis cycle for {state.symbol}. Verdict: {state.final_verdict}. {state.final_reason}{route_text}{contradiction_text}{memory_text} No broker execution was authorized."
+
+    @staticmethod
+    def to_dict(response: AgentResponse) -> dict[str, Any]:
+        return asdict(response)
 
 def sqlite_snapshot_observations(snapshot: dict[str, Any] | None, symbol: str) -> list[dict[str, Any]]:
     """Convert the latest bridge snapshot into explicit agent evidence."""
