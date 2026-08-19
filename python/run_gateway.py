@@ -14,9 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from neofl_gateway.agent import AgentLoop
 from neofl_gateway.api import StateStore, build_default_api
 from neofl_gateway.bridge import Bridge, default_terminal_files
-from neofl_gateway.store import Store
 from neofl_gateway.normalizers import normalize_cme, normalize_tradingview
 from neofl_gateway.server import make_server
+from neofl_gateway.store import Store
+from neofl_gateway.supabase_memory import SupabaseMemory
 from neofl_gateway.webhooks import WebhookRegistry
 
 
@@ -31,10 +32,12 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    store = StateStore()
+    memory = SupabaseMemory()
+    store = StateStore(memory=memory)
     db = Store(args.db)
     api = build_default_api(store, token=args.token)
     agent = AgentLoop()
+    api.create("/memory/health", lambda q: memory.status(), description="Durable Supabase memory status.", requires_auth=False)
 
     files = Path(args.mt5_files) if args.mt5_files else default_terminal_files()
     bridge = None
@@ -46,7 +49,7 @@ def main() -> int:
         api.create("/mt5/state", lambda q: db.latest_snapshot(), description="Latest full MT5 state snapshot.")
         api.create("/mt5/events", lambda q: db.recent_events(int(q.get("limit", 100)), q.get("engine")),
                    description="Engine decisions from MT5.")
-    api.create("/db/stats", lambda q: db.stats(), description="Persistence statistics.")
+    api.create("/db/stats", lambda q: db.stats(), description="Local bridge persistence statistics.")
 
     webhooks = WebhookRegistry()
     tv = webhooks.create("tradingview", normalize_tradingview)
@@ -59,6 +62,7 @@ def main() -> int:
     print(f"  read API      {base}/")
     print(f"  agent input   POST {base}/input")
     print(f"  auth          {'Bearer token required' if args.token else 'DISABLED (local only)'}")
+    print(f"  persistence   {'SUPABASE enabled' if memory.enabled else 'local only (configure NEOFL_SUPABASE_URL + service key)'}")
     print("  execution     DISABLED — analysis loop only")
     print()
     print("  Webhooks:")
