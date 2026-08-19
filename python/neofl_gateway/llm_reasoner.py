@@ -1,9 +1,4 @@
-"""Optional LLM reasoner for NeoFL Agentic Soul.
-
-Uses the OpenAI Responses API through the standard library so the gateway keeps a
-zero-dependency core. If OPENAI_API_KEY is absent or the request fails, the caller
-must fall back to deterministic fail-closed reasoning.
-"""
+"""Optional LLM reasoner for NeoFL Agentic Soul."""
 from __future__ import annotations
 
 import json
@@ -23,20 +18,12 @@ class OpenAIReasoner:
     def enabled(self) -> bool:
         return bool(self.api_key)
 
-    def reason(self, *, goal: str, symbol: str, observations: list[dict[str, Any]], hypotheses: list[dict[str, Any]], contradictions: list[str]) -> dict[str, Any] | None:
+    def reason(self, *, goal: str, symbol: str, observations: list[dict[str, Any]], hypotheses: list[dict[str, Any]], contradictions: list[str], memory: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
         if not self.enabled:
             return None
-        prompt = self._prompt(goal, symbol, observations, hypotheses, contradictions)
+        prompt = self._prompt(goal, symbol, observations, hypotheses, contradictions, memory or [])
         payload = json.dumps({"model": self.model, "input": prompt}).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/responses",
-            data=payload,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-        )
+        req = urllib.request.Request("https://api.openai.com/v1/responses", data=payload, method="POST", headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
@@ -49,11 +36,11 @@ class OpenAIReasoner:
             return None
 
     @staticmethod
-    def _prompt(goal: str, symbol: str, observations: list[dict[str, Any]], hypotheses: list[dict[str, Any]], contradictions: list[str]) -> str:
+    def _prompt(goal: str, symbol: str, observations: list[dict[str, Any]], hypotheses: list[dict[str, Any]], contradictions: list[str], memory: list[dict[str, Any]]) -> str:
         return f"""You are the bounded reasoning layer of NeoFL, a trading research and decision-support system.
 You are NOT an execution authority. Never invent market data, prices, positions, news, rules, or outcomes.
 If evidence is missing, say so. Treat UNKNOWN/UNAVAILABLE/INVALID evidence as non-tradable.
-Challenge the strongest thesis and produce a calibrated recommendation.
+Use prior episodic memory as context, not as proof. Challenge the strongest thesis and produce a calibrated recommendation.
 
 Return ONLY valid JSON with this shape:
 {{
@@ -71,6 +58,7 @@ SYMBOL: {symbol}
 OBSERVATIONS: {json.dumps(observations, default=str)}
 CURRENT HYPOTHESES: {json.dumps(hypotheses, default=str)}
 CONTRADICTIONS: {json.dumps(contradictions, default=str)}
+PRIOR EPISODIC MEMORY: {json.dumps(memory, default=str)}
 """
 
     @staticmethod
