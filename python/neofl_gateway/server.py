@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .agent import AgentLoop, AgentRequest
 from .api import ApiRegistry, StateStore
+from .schema import DataQuality, Decision, Verdict
 from .webhooks import WebhookRegistry
 
 log = logging.getLogger("neofl.gateway")
@@ -75,7 +76,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         body = self.rfile.read(length)
 
-        # Control Room -> Soul ingress. Analysis only: no execution capability exists here.
         if parsed.path == "/input":
             if not self._auth():
                 self.send_response(401)
@@ -94,10 +94,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 response = self.agent.handle(request)
                 data = self.agent.to_dict(response)
                 self.store.put_request(data)
-                self.store.put_decision(__import__("neofl_gateway.schema", fromlist=["Decision"]).Decision(
-                    engine="Soul", symbol=request.symbol or "UNSPECIFIED",
-                    verdict=__import__("neofl_gateway.schema", fromlist=["Verdict"]).Verdict.PROCEED,
-                    quality=__import__("neofl_gateway.schema", fromlist=["DataQuality"]).DataQuality.OK,
+                self.store.put_decision(Decision(
+                    engine="Soul",
+                    symbol=request.symbol or "UNSPECIFIED",
+                    verdict=Verdict.PROCEED,
+                    quality=DataQuality.OK,
                     reason="Analysis request routed; execution authority remains disabled.",
                     inputs=request.text,
                 ))
@@ -109,7 +110,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self._error(500, "agent error")
             return
 
-        # Existing signed market-data webhook surface.
         hook = self.webhooks.by_path(parsed.path)
         if hook is None:
             self._error(404, "not found")
