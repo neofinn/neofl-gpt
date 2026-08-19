@@ -38,7 +38,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compile Python gateway
-        run: python -m compileall -q python
-      - name: Run agent loop test
-        run: python -m unittest tests.test_agent_loop
+      - name: Compile Python gateway and tests
+        run: python -m compileall -q python tests
+      - name: Run Python gateway test suite
+        env:
+          PYTHONPATH: python
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
