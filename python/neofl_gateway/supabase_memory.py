@@ -54,7 +54,7 @@ class SupabaseMemory:
         params = {"select": select, "limit": str(max(1, min(limit, 500)))}
         if order:
             params["order"] = order
-        url = f"{self.url}/rest/v1/{table}?{urllib.parse.urlencode(params, safe='(),:*') }"
+        url = f"{self.url}/rest/v1/{table}?{urllib.parse.urlencode(params, safe='(),:*')}"
         req = urllib.request.Request(url, method="GET", headers=self._headers())
         try:
             with urllib.request.urlopen(req, timeout=8) as response:
@@ -107,13 +107,7 @@ class SupabaseMemory:
         })
 
     def execution_reports(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Return execution reports enriched with their intent and MT5 account identity.
-
-        The browser never receives the service-role key. The gateway joins the three
-        server-side sources needed by the Control Room: execution report, order intent,
-        and gateway account. This also preserves rejected signals, including their
-        rejection reason, instead of collapsing them into a generic error.
-        """
+        """Return execution reports enriched with account and trade state."""
         reports = self._select(
             "gateway_execution_reports",
             "id,timestamp,intent_id,account_id,adapter,environment,status,filled_quantity,average_fill_price,realized_pnl,broker_order_id,rejection_code,rejection_reason,metadata",
@@ -152,19 +146,18 @@ class SupabaseMemory:
                 if ticket and candidate == ticket:
                     matched_position = position
                     break
-
             if matched_position is not None:
                 unrealized = matched_position.get("profit")
                 if unrealized is None:
                     unrealized = matched_position.get("unrealized_pnl")
 
             status = str(report.get("status") or "").upper()
-            if status in {"FILLED", "PARTIALLY_FILLED", "OPEN", "RUNNING"} and matched_position is not None:
-                bucket = "RUNNING"
-            elif status in {"REJECTED", "DECLINED", "BLOCKED", "ERROR"}:
+            if status in {"REJECTED", "DECLINED", "BLOCKED", "ERROR"}:
                 bucket = "REJECTED"
+            elif report.get("realized_pnl") is not None or status in {"CLOSED", "FILLED_CLOSED", "CANCELLED"}:
+                bucket = "CLOSED"
             else:
-                bucket = "CLOSED" if report.get("realized_pnl") is not None or status in {"CLOSED", "FILLED_CLOSED", "CANCELLED"} else "RUNNING"
+                bucket = "RUNNING"
 
             out.append({
                 "id": report.get("id"),
