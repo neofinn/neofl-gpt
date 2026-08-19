@@ -44,6 +44,7 @@ def main() -> int:
     agent = AgentLoop(
         soul=soul,
         context_provider=lambda symbol: sqlite_snapshot_observations(db.latest_snapshot(), symbol),
+        memory_provider=lambda symbol: memory.recent_agent_memory(symbol, limit=10),
     )
     api.create(
         "/agent/status",
@@ -54,8 +55,9 @@ def main() -> int:
             "tools": soul.tools.names(),
             "execution_authorized": False,
             "perception": "MT5 SQLite bridge snapshot",
+            "episodic_memory": memory.enabled,
         },
-        description="Agentic Soul state, perception and reasoning provider.",
+        description="Agentic Soul state, perception, memory and reasoning provider.",
     )
     api.create("/memory/health", lambda q: memory.status(), description="Durable Supabase memory status.", requires_auth=False)
 
@@ -63,12 +65,10 @@ def main() -> int:
     bridge = None
     if files and Path(files).is_dir():
         bridge = Bridge(Path(files), db)
-        api.create("/mt5/health", lambda q: dict(zip(("alive", "detail"), bridge.terminal_alive())),
-                   description="Is the terminal writing telemetry?", requires_auth=False)
+        api.create("/mt5/health", lambda q: dict(zip(("alive", "detail"), bridge.terminal_alive())), description="Is the terminal writing telemetry?", requires_auth=False)
         api.create("/mt5/positions", lambda q: db.open_positions(), description="Open positions from latest MT5 snapshot.")
         api.create("/mt5/state", lambda q: db.latest_snapshot(), description="Latest full MT5 state snapshot.")
-        api.create("/mt5/events", lambda q: db.recent_events(int(q.get("limit", 100)), q.get("engine")),
-                   description="Engine decisions from MT5.")
+        api.create("/mt5/events", lambda q: db.recent_events(int(q.get("limit", 100)), q.get("engine")), description="Engine decisions from MT5.")
     api.create("/db/stats", lambda q: db.stats(), description="Local bridge persistence statistics.")
 
     webhooks = WebhookRegistry()
@@ -85,7 +85,8 @@ def main() -> int:
     print(f"  auth          {'Bearer token required' if args.token else 'DISABLED (local only)'}")
     print(f"  persistence   {'SUPABASE enabled' if memory.enabled else 'local only (configure NEOFL_SUPABASE_URL + service key)'}")
     print(f"  reasoner      {'OpenAI ' + reasoner.model if reasoner.enabled else 'deterministic fail-closed fallback'}")
-    print("  perception    MT5 latest snapshot via SQLite bridge")
+    print(f"  perception    MT5 latest snapshot via SQLite bridge")
+    print(f"  memory        {'Supabase episodic' if memory.enabled else 'disabled'}")
     print("  execution     DISABLED — Agentic Soul is recommendation-only")
     print()
     print("  Webhooks:")
