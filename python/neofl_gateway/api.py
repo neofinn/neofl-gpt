@@ -1,12 +1,4 @@
-"""API endpoint generation — the output side.
-
-Canon: the gateway publishes real-time state and logs events. This is where the
-observer, the external brain, and any dashboard read from.
-
-An endpoint is declared, not hand-written: give it a path, a handler, and whether it
-requires auth, and the server exposes it. That keeps every endpoint consistent about
-authentication, error shape, and — critically — read-only-ness.
-"""
+"""API endpoint generation and bounded runtime state."""
 from __future__ import annotations
 
 import hmac
@@ -56,9 +48,7 @@ class ApiRegistry:
     def authorize(self, provided: str | None) -> bool:
         if self._token is None:
             return True
-        if not provided:
-            return False
-        return hmac.compare_digest(self._token, provided)
+        return bool(provided) and hmac.compare_digest(self._token, provided)
 
     def describe(self) -> list[dict[str, Any]]:
         return [{"path": e.path, "method": e.method, "description": e.description, "requires_auth": e.requires_auth}
@@ -66,25 +56,33 @@ class ApiRegistry:
 
 
 class StateStore:
-    """Bounded process state exposed to the Control Room."""
-    def __init__(self, history_limit: int = 1000) -> None:
+    """Bounded live state with optional durable Supabase mirroring."""
+    def __init__(self, history_limit: int = 1000, memory=None) -> None:
         self._latest: dict[str, dict[str, Any]] = {}
         self._events: list[dict[str, Any]] = []
         self._decisions: list[dict[str, Any]] = []
         self._requests: list[dict[str, Any]] = []
         self._history_limit = history_limit
+        self.memory = memory
 
     def put_snapshot(self, snapshot) -> None:
         key = snapshot.mapped_symbol or snapshot.instrument
         record = snapshot.to_dict()
         self._latest[key] = record
         self._append(self._events, record)
+        if self.memory:
+            self.memory.brain_event("Data", "MARKET_SNAPSHOT", record)
 
     def put_decision(self, decision) -> None:
-        self._append(self._decisions, decision.to_dict())
+        record = decision.to_dict()
+        self._append(self._decisions, record)
+        if self.memory:
+            self.memory.decision(record)
 
     def put_request(self, response: dict[str, Any]) -> None:
         self._append(self._requests, response)
+        if self.memory:
+            self.memory.request(response)
 
     def _append(self, target: list, record: dict[str, Any]) -> None:
         target.append(record)
@@ -106,7 +104,7 @@ class StateStore:
 
 def build_default_api(store: StateStore, token: str | None = None) -> ApiRegistry:
     api = ApiRegistry(token=token)
-    api.create("/health", lambda q: {"status": "ok", "time": time.time()}, description="Liveness check.", requires_auth=False)
+    api.create("/health", lambda q: {"status": "ok", "time": time.time(), "persistence": store.memory.status() if store.memory else {"enabled": False}}, description="Liveness and persistence check.", requires_auth=False)
     api.create("/state", lambda q: store.latest(q.get("symbol")), description="Latest normalized snapshot per symbol.")
     api.create("/events", lambda q: store.events(int(q.get("limit", 100))), description="Recent normalized market events.")
     api.create("/decisions", lambda q: store.decisions(int(q.get("limit", 100))), description="Recent engine decisions with provenance.")
