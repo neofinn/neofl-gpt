@@ -53,6 +53,7 @@ class AgentState:
     phase: str = "UNDERSTANDING"
     iteration: int = 0
     max_iterations: int = 3
+    context: dict[str, Any] = field(default_factory=dict)
     tasks: list[Task] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
     hypotheses: list[Hypothesis] = field(default_factory=list)
@@ -125,7 +126,7 @@ class AgenticSoul:
 
     def create_plan(self, text: str, symbol: str, mode: str, context: dict[str, Any]) -> AgentState:
         request_id = context.get("request_id") or f"neo-{uuid.uuid4().hex[:16]}"
-        state = AgentState(goal=text, symbol=symbol, request_id=request_id)
+        state = AgentState(goal=text, symbol=symbol, request_id=request_id, context=context)
         lowered = text.lower()
         names = [name for name, words in self.BRAIN_KEYWORDS.items() if any(w in lowered for w in words)]
         if symbol and "Trader Brains" not in names and mode in {"analyze", "trade"}:
@@ -152,7 +153,6 @@ class AgenticSoul:
         while state.iteration < state.max_iterations:
             state.iteration += 1
             state.phase = "OBSERVING"
-            progress = False
             for task in state.tasks:
                 if task.status == "DONE":
                     continue
@@ -162,9 +162,6 @@ class AgenticSoul:
                 task.status = "DONE"
                 memory.add("task", {"task": asdict(task)})
                 self._consume(state, task, result)
-                progress = True
-                if state.phase == "BLOCKED":
-                    break
 
             state.phase = "CROSS_EXAMINING"
             self._cross_examine(state)
@@ -201,8 +198,8 @@ class AgenticSoul:
         if not state.observations:
             state.contradictions.append("No evidence was available to evaluate the request.")
             return
-        unknown = [o for o in state.observations if o.quality in {"UNKNOWN", "UNAVAILABLE", "INVALID"}]
-        if unknown and not state.hypotheses:
+        usable = [o for o in state.observations if o.quality in {"OK", "DATA_OK", "DELAYED", "DATA_DELAYED"}]
+        if not usable:
             state.contradictions.append("Evidence quality is insufficient to form a defensible thesis.")
         if len(state.hypotheses) >= 2:
             ranked = sorted(state.hypotheses, key=lambda h: h.confidence, reverse=True)
@@ -210,7 +207,7 @@ class AgenticSoul:
                 state.contradictions.append("Leading hypotheses are too close in confidence; more evidence is required.")
 
     def _replan(self, state: AgentState) -> None:
-        state.tasks = [t for t in state.tasks if t.name != "risk_gate" or t.status == "DONE"]
+        state.tasks = [t for t in state.tasks if t.id.startswith("recheck:") or t.status != "DONE"]
         state.tasks.append(self._task(
             f"recheck:{state.iteration}", "context_observation",
             "Re-check missing or conflicting evidence before deciding.", 120,
@@ -222,7 +219,7 @@ class AgenticSoul:
             state.final_verdict = "NO_DECISION"
             state.final_reason = "No evidence available; the agent refuses to invent market facts."
             return
-        bad = [o for o in state.observations if o.quality in {"INVALID", "UNAVAILABLE"}]
+        bad = [o for o in state.observations if o.quality in {"INVALID", "UNAVAILABLE", "DATA_INVALID", "DATA_UNAVAILABLE"}]
         if bad or state.contradictions:
             state.final_verdict = "WAIT"
             state.final_reason = "Evidence is incomplete or contradicted; additional observation is required."
@@ -255,35 +252,50 @@ class AgenticSoul:
 
     @staticmethod
     def _context_observation(state: AgentState, task: Task) -> dict[str, Any]:
-        # Context is injected by the caller and consumed by AgentLoop. The task itself
-        # stays pure so it is safe to run in tests and simulations.
-        return {"observations": []}
+        observations = []
+        for item in state.context.get("observations") or []:
+            if isinstance(item, dict):
+                observations.append({
+                    "source": str(item.get("source", "external")),
+                    "claim": str(item.get("claim", "evidence")),
+                    "value": item.get("value"),
+                    "quality": str(item.get("quality", "UNKNOWN")),
+                    "confidence": float(item.get("confidence", 0.0) or 0.0),
+                    "evidence": [str(x) for x in item.get("evidence", [])],
+                })
+        if not observations:
+            observations.append({
+                "source": "context",
+                "claim": "live_evidence",
+                "value": None,
+                "quality": "UNKNOWN",
+                "confidence": 0.0,
+                "evidence": ["No live/context evidence was supplied to the agent."],
+            })
+        return {"observations": observations}
 
     def _evidence_audit(self, state: AgentState, task: Task) -> dict[str, Any]:
-        brain = task.id.split(":", 1)[1] if ":" in task.id else "Agent"
-        observations = [o for o in state.observations if o.source == brain]
-        if not observations:
-            return {
-                "observations": [{
-                    "source": brain,
-                    "claim": "specialist_evidence",
-                    "value": "not_available",
-                    "quality": "UNKNOWN",
-                    "confidence": 0.0,
-                    "evidence": ["No specialist data provider is connected yet."],
-                }]
-            }
-        return {"observations": [], "hypotheses": [{
+        brain = task.id.split(":", 1)[1] if task.id.startswith("brain:") else "Critic Brain"
+        usable = [o for o in state.observations if o.quality in {"OK", "DATA_OK", "DELAYED", "DATA_DELAYED"}]
+        if not usable:
+            return {"observations": []}
+        confidence = sum(o.confidence for o in usable) / max(1, len(usable))
+        confidence = min(0.95, max(0.0, confidence))
+        if brain == "Critic Brain":
+            return {"observations": [], "contradictions": [
+                "Critic requires independent opposing evidence before declaring a thesis validated."
+            ]}
+        return {"hypotheses": [{
             "name": f"{brain} thesis",
-            "thesis": f"{brain} evidence supports continued investigation; no execution conclusion is authorized.",
-            "confidence": min(0.55, sum(o.confidence for o in observations) / max(1, len(observations))),
-            "evidence": [e for o in observations for e in o.evidence],
-            "invalidators": ["new contradictory market data", "data quality degradation"],
+            "thesis": f"{brain} finds the supplied evidence directionally relevant, but this is an analysis recommendation only.",
+            "confidence": confidence,
+            "evidence": [e for o in usable for e in o.evidence],
+            "invalidators": ["new contradictory market data", "data quality degradation", "unverified assumptions"],
         }]}
 
     @staticmethod
     def _risk_gate(state: AgentState, task: Task) -> dict[str, Any]:
-        if any(o.quality in {"INVALID", "UNAVAILABLE", "UNKNOWN"} for o in state.observations):
+        if any(o.quality in {"INVALID", "UNAVAILABLE", "UNKNOWN", "DATA_INVALID", "DATA_UNAVAILABLE"} for o in state.observations):
             return {"observations": [{
                 "source": "Risk Brain",
                 "claim": "execution_gate",
