@@ -21,6 +21,9 @@ async function proxy(path: string, init?: RequestInit) {
 
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.search;
+  if (request.nextUrl.pathname.endsWith('/trades')) {
+    return proxy(`/execution-reports${query}`);
+  }
   return proxy(`/state${query}`);
 }
 
