@@ -46,9 +46,10 @@ class AgentResponse:
 class AgentLoop:
     """Agentic Soul: goal -> plan -> observe -> specialist -> critic -> replan -> decide."""
 
-    def __init__(self, soul: AgenticSoul | None = None, context_provider: Callable[[str], list[dict[str, Any]]] | None = None) -> None:
+    def __init__(self, soul: AgenticSoul | None = None, context_provider: Callable[[str], list[dict[str, Any]]] | None = None, memory_provider: Callable[[str], list[dict[str, Any]]] | None = None) -> None:
         self.soul = soul or AgenticSoul()
         self.context_provider = context_provider
+        self.memory_provider = memory_provider
 
     def handle(self, request: AgentRequest) -> AgentResponse:
         text = request.text.strip()
@@ -60,13 +61,17 @@ class AgentLoop:
         context = dict(request.context or {})
         context["request_id"] = request.request_id or f"neo-{int(time.time() * 1000)}"
 
-        # Live observer context is injected automatically unless the caller supplied
-        # explicit observations. This is the perception layer of the agentic loop.
         if not context.get("observations") and self.context_provider and request.symbol:
             try:
                 context["observations"] = self.context_provider(request.symbol) or []
             except Exception:
                 context["observations"] = []
+
+        if self.memory_provider and request.symbol:
+            try:
+                context["episodic_memory"] = self.memory_provider(request.symbol) or []
+            except Exception:
+                context["episodic_memory"] = []
 
         state = self.soul.create_plan(text, symbol, request.mode, context)
         for item in context.get("observations") or []:
@@ -86,13 +91,7 @@ class AgentLoop:
             answer=self._answer(state, route),
             reasoning_state=state.phase,
             created_at=time.time(),
-            safety={
-                "execution_authorized": False,
-                "live_trading": False,
-                "requires_risk_gate": True,
-                "broker_order_authority": False,
-                "agentic_loop": True,
-            },
+            safety={"execution_authorized": False, "live_trading": False, "requires_risk_gate": True, "broker_order_authority": False, "agentic_loop": True},
             instrument_route=route,
             plan=[asdict(t) for t in state.tasks],
             observations=[asdict(o) for o in state.observations],
@@ -106,26 +105,14 @@ class AgentLoop:
     @staticmethod
     def _observation(item: dict[str, Any]):
         from .agentic import Observation
-        return Observation(
-            source=str(item.get("source", "external")),
-            claim=str(item.get("claim", "evidence")),
-            value=item.get("value"),
-            quality=str(item.get("quality", "UNKNOWN")),
-            confidence=float(item.get("confidence", 0.0) or 0.0),
-            evidence=[str(x) for x in item.get("evidence", [])],
-        )
+        return Observation(source=str(item.get("source", "external")), claim=str(item.get("claim", "evidence")), value=item.get("value"), quality=str(item.get("quality", "UNKNOWN")), confidence=float(item.get("confidence", 0.0) or 0.0), evidence=[str(x) for x in item.get("evidence", [])])
 
     @staticmethod
     def _answer(state, route: dict[str, Any] | None) -> str:
-        route_text = ""
-        if route:
-            route_text = f" Instrument route: {route['signal_domain']}. {route['reason']}"
+        route_text = "" if not route else f" Instrument route: {route['signal_domain']}. {route['reason']}"
         contradiction_text = "" if not state.contradictions else f" Contradictions: {'; '.join(state.contradictions[:3])}."
-        return (
-            f"Soul completed an agentic analysis cycle for {state.symbol}. "
-            f"Verdict: {state.final_verdict}. {state.final_reason}"
-            f"{route_text}{contradiction_text} No broker execution was authorized."
-        )
+        memory_text = " Prior episodic memory was supplied." if state.context.get("episodic_memory") else ""
+        return f"Soul completed an agentic analysis cycle for {state.symbol}. Verdict: {state.final_verdict}. {state.final_reason}{route_text}{contradiction_text}{memory_text} No broker execution was authorized."
 
     @staticmethod
     def to_dict(response: AgentResponse) -> dict[str, Any]:
@@ -149,26 +136,8 @@ def sqlite_snapshot_observations(snapshot: dict[str, Any] | None, symbol: str) -
     market = payload.get("market") or {}
     account = payload.get("account") or {}
     positions = payload.get("positions") or []
-    observations = [{
-        "source": "MT5",
-        "claim": "market_state",
-        "value": market,
-        "quality": "OK",
-        "confidence": 0.95,
-        "evidence": ["Latest normalized MT5 bridge snapshot."],
-    }, {
-        "source": "MT5",
-        "claim": "account_state",
-        "value": {k: account.get(k) for k in ("balance", "equity") if k in account},
-        "quality": "OK",
-        "confidence": 0.95,
-        "evidence": ["Latest MT5 account telemetry."],
-    }, {
-        "source": "MT5",
-        "claim": "open_positions",
-        "value": positions,
-        "quality": "OK",
-        "confidence": 0.95,
-        "evidence": ["Latest MT5 position snapshot."],
-    }]
-    return observations
+    return [
+        {"source": "MT5", "claim": "market_state", "value": market, "quality": "OK", "confidence": 0.95, "evidence": ["Latest normalized MT5 bridge snapshot."]},
+        {"source": "MT5", "claim": "account_state", "value": {k: account.get(k) for k in ("balance", "equity") if k in account}, "quality": "OK", "confidence": 0.95, "evidence": ["Latest MT5 account telemetry."]},
+        {"source": "MT5", "claim": "open_positions", "value": positions, "quality": "OK", "confidence": 0.95, "evidence": ["Latest MT5 position snapshot."]},
+    ]
