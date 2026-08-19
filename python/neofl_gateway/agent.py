@@ -5,9 +5,10 @@ planner/observer/critic/replanner core. It never places orders.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .agentic import AgenticSoul
 from .instrument_classification import classify_instrument
@@ -45,8 +46,9 @@ class AgentResponse:
 class AgentLoop:
     """Agentic Soul: goal -> plan -> observe -> specialist -> critic -> replan -> decide."""
 
-    def __init__(self, soul: AgenticSoul | None = None) -> None:
+    def __init__(self, soul: AgenticSoul | None = None, context_provider: Callable[[str], list[dict[str, Any]]] | None = None) -> None:
         self.soul = soul or AgenticSoul()
+        self.context_provider = context_provider
 
     def handle(self, request: AgentRequest) -> AgentResponse:
         text = request.text.strip()
@@ -57,10 +59,16 @@ class AgentLoop:
         route = asdict(classify_instrument(request.symbol)) if request.symbol else None
         context = dict(request.context or {})
         context["request_id"] = request.request_id or f"neo-{int(time.time() * 1000)}"
-        state = self.soul.create_plan(text, symbol, request.mode, context)
 
-        # Explicit caller-provided evidence is trusted only as supplied evidence.
-        # Nothing is inferred when it is absent.
+        # Live observer context is injected automatically unless the caller supplied
+        # explicit observations. This is the perception layer of the agentic loop.
+        if not context.get("observations") and self.context_provider and request.symbol:
+            try:
+                context["observations"] = self.context_provider(request.symbol) or []
+            except Exception:
+                context["observations"] = []
+
+        state = self.soul.create_plan(text, symbol, request.mode, context)
         for item in context.get("observations") or []:
             if isinstance(item, dict):
                 state.observations.append(self._observation(item))
@@ -122,3 +130,45 @@ class AgentLoop:
     @staticmethod
     def to_dict(response: AgentResponse) -> dict[str, Any]:
         return asdict(response)
+
+
+def sqlite_snapshot_observations(snapshot: dict[str, Any] | None, symbol: str) -> list[dict[str, Any]]:
+    """Convert the latest bridge snapshot into explicit agent evidence."""
+    if not snapshot:
+        return []
+    raw = snapshot.get("raw")
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError:
+        payload = None
+    if not isinstance(payload, dict):
+        return []
+    snap_symbol = str(payload.get("symbol") or snapshot.get("symbol") or "")
+    if symbol and snap_symbol and snap_symbol.upper() != symbol.upper():
+        return []
+    market = payload.get("market") or {}
+    account = payload.get("account") or {}
+    positions = payload.get("positions") or []
+    observations = [{
+        "source": "MT5",
+        "claim": "market_state",
+        "value": market,
+        "quality": "OK",
+        "confidence": 0.95,
+        "evidence": ["Latest normalized MT5 bridge snapshot."],
+    }, {
+        "source": "MT5",
+        "claim": "account_state",
+        "value": {k: account.get(k) for k in ("balance", "equity") if k in account},
+        "quality": "OK",
+        "confidence": 0.95,
+        "evidence": ["Latest MT5 account telemetry."],
+    }, {
+        "source": "MT5",
+        "claim": "open_positions",
+        "value": positions,
+        "quality": "OK",
+        "confidence": 0.95,
+        "evidence": ["Latest MT5 position snapshot."],
+    }]
+    return observations
