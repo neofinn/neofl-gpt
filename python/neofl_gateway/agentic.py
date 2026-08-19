@@ -208,10 +208,7 @@ class AgenticSoul:
 
     def _replan(self, state: AgentState) -> None:
         state.tasks = [t for t in state.tasks if t.id.startswith("recheck:") or t.status != "DONE"]
-        state.tasks.append(self._task(
-            f"recheck:{state.iteration}", "context_observation",
-            "Re-check missing or conflicting evidence before deciding.", 120,
-        ))
+        state.tasks.append(self._task(f"recheck:{state.iteration}", "context_observation", "Re-check missing or conflicting evidence before deciding.", 120))
         state.contradictions.clear()
 
     def _llm_synthesis(self, state: AgentState) -> None:
@@ -224,6 +221,7 @@ class AgenticSoul:
                 observations=[asdict(o) for o in state.observations],
                 hypotheses=[asdict(h) for h in state.hypotheses],
                 contradictions=state.contradictions,
+                memory=state.context.get("episodic_memory", []) or [],
             )
         except Exception:
             result = None
@@ -232,13 +230,7 @@ class AgenticSoul:
         for item in result.get("hypotheses", []) or []:
             if isinstance(item, dict):
                 try:
-                    state.hypotheses.append(Hypothesis(
-                        name=str(item.get("name", "LLM thesis")),
-                        thesis=str(item.get("thesis", "")),
-                        confidence=float(item.get("confidence", 0.0) or 0.0),
-                        evidence=[str(x) for x in item.get("evidence", [])],
-                        invalidators=[str(x) for x in item.get("invalidators", [])],
-                    ))
+                    state.hypotheses.append(Hypothesis(name=str(item.get("name", "LLM thesis")), thesis=str(item.get("thesis", "")), confidence=float(item.get("confidence", 0.0) or 0.0), evidence=[str(x) for x in item.get("evidence", [])], invalidators=[str(x) for x in item.get("invalidators", [])]))
                 except (TypeError, ValueError):
                     pass
         for contradiction in result.get("contradictions", []) or []:
@@ -284,37 +276,16 @@ class AgenticSoul:
     @staticmethod
     def _instrument_discovery(state: AgentState, task: Task) -> dict[str, Any]:
         route = classify_instrument(state.symbol)
-        return {"observations": [{
-            "source": "instrument_classifier",
-            "claim": "signal_domain",
-            "value": route.signal_domain.value,
-            "quality": "OK" if route.signal_domain.value != "UNKNOWN" else "UNKNOWN",
-            "confidence": 1.0 if route.signal_domain.value != "UNKNOWN" else 0.2,
-            "evidence": [route.reason],
-        }]}
+        return {"observations": [{"source": "instrument_classifier", "claim": "signal_domain", "value": route.signal_domain.value, "quality": "OK" if route.signal_domain.value != "UNKNOWN" else "UNKNOWN", "confidence": 1.0 if route.signal_domain.value != "UNKNOWN" else 0.2, "evidence": [route.reason]}]}
 
     @staticmethod
     def _context_observation(state: AgentState, task: Task) -> dict[str, Any]:
         observations = []
         for item in state.context.get("observations") or []:
             if isinstance(item, dict):
-                observations.append({
-                    "source": str(item.get("source", "external")),
-                    "claim": str(item.get("claim", "evidence")),
-                    "value": item.get("value"),
-                    "quality": str(item.get("quality", "UNKNOWN")),
-                    "confidence": float(item.get("confidence", 0.0) or 0.0),
-                    "evidence": [str(x) for x in item.get("evidence", [])],
-                })
+                observations.append({"source": str(item.get("source", "external")), "claim": str(item.get("claim", "evidence")), "value": item.get("value"), "quality": str(item.get("quality", "UNKNOWN")), "confidence": float(item.get("confidence", 0.0) or 0.0), "evidence": [str(x) for x in item.get("evidence", [])]})
         if not observations:
-            observations.append({
-                "source": "context",
-                "claim": "live_evidence",
-                "value": None,
-                "quality": "UNKNOWN",
-                "confidence": 0.0,
-                "evidence": ["No live/context evidence was supplied to the agent."],
-            })
+            observations.append({"source": "context", "claim": "live_evidence", "value": None, "quality": "UNKNOWN", "confidence": 0.0, "evidence": ["No live/context evidence was supplied to the agent."]})
         return {"observations": observations}
 
     def _evidence_audit(self, state: AgentState, task: Task) -> dict[str, Any]:
@@ -324,36 +295,14 @@ class AgenticSoul:
             return {"observations": []}
         confidence = min(0.95, max(0.0, sum(o.confidence for o in usable) / max(1, len(usable))))
         if brain == "Critic Brain":
-            return {"observations": [], "contradictions": [
-                "Critic requires independent opposing evidence before declaring a thesis validated."
-            ]}
-        return {"hypotheses": [{
-            "name": f"{brain} thesis",
-            "thesis": f"{brain} finds the supplied evidence directionally relevant, but this is an analysis recommendation only.",
-            "confidence": confidence,
-            "evidence": [e for o in usable for e in o.evidence],
-            "invalidators": ["new contradictory market data", "data quality degradation", "unverified assumptions"],
-        }]}
+            return {"observations": [], "contradictions": ["Critic requires independent opposing evidence before declaring a thesis validated."]}
+        return {"hypotheses": [{"name": f"{brain} thesis", "thesis": f"{brain} finds the supplied evidence directionally relevant, but this is an analysis recommendation only.", "confidence": confidence, "evidence": [e for o in usable for e in o.evidence], "invalidators": ["new contradictory market data", "data quality degradation", "unverified assumptions"]}]}
 
     @staticmethod
     def _risk_gate(state: AgentState, task: Task) -> dict[str, Any]:
         if any(o.quality in {"INVALID", "UNAVAILABLE", "UNKNOWN", "DATA_INVALID", "DATA_UNAVAILABLE"} for o in state.observations):
-            return {"observations": [{
-                "source": "Risk Brain",
-                "claim": "execution_gate",
-                "value": "BLOCKED",
-                "quality": "OK",
-                "confidence": 1.0,
-                "evidence": ["Missing/unknown evidence forces a fail-closed risk decision."],
-            }]}
-        return {"observations": [{
-            "source": "Risk Brain",
-            "claim": "execution_gate",
-            "value": "ANALYSIS_ONLY",
-            "quality": "OK",
-            "confidence": 1.0,
-            "evidence": ["Agentic Soul cannot authorize broker execution."],
-        }]}
+            return {"observations": [{"source": "Risk Brain", "claim": "execution_gate", "value": "BLOCKED", "quality": "OK", "confidence": 1.0, "evidence": ["Missing/unknown evidence forces a fail-closed risk decision."]}]}
+        return {"observations": [{"source": "Risk Brain", "claim": "execution_gate", "value": "ANALYSIS_ONLY", "quality": "OK", "confidence": 1.0, "evidence": ["Agentic Soul cannot authorize broker execution."]}]}
 
 
 def state_to_dict(state: AgentState) -> dict[str, Any]:
