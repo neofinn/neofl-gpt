@@ -1,0 +1,3 @@
+# NeoFL gateway has a zero-dependency core. Optional integrations may add packages here.
+# Supabase persistence uses the standard-library HTTPS client so the gateway can boot
+# without installing a third-party SDK.
