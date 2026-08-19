@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start the NeoFL gateway and first Soul-facing agent loop."""
+"""Start the NeoFL gateway and Agentic Soul."""
 from __future__ import annotations
 
 import argparse
@@ -12,8 +12,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from neofl_gateway.agent import AgentLoop
+from neofl_gateway.agentic import AgenticSoul
 from neofl_gateway.api import StateStore, build_default_api
 from neofl_gateway.bridge import Bridge, default_terminal_files
+from neofl_gateway.llm_reasoner import OpenAIReasoner
 from neofl_gateway.normalizers import normalize_cme, normalize_tradingview
 from neofl_gateway.server import make_server
 from neofl_gateway.store import Store
@@ -22,7 +24,7 @@ from neofl_gateway.webhooks import WebhookRegistry
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="NeoFL data and agent gateway")
+    parser = argparse.ArgumentParser(description="NeoFL data and agentic AI gateway")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--token", default=None, help="Bearer token; omit only for local development")
@@ -36,7 +38,21 @@ def main() -> int:
     store = StateStore(memory=memory)
     db = Store(args.db)
     api = build_default_api(store, token=args.token)
-    agent = AgentLoop()
+
+    reasoner = OpenAIReasoner()
+    soul = AgenticSoul(reasoner=reasoner)
+    agent = AgentLoop(soul=soul)
+    api.create(
+        "/agent/status",
+        lambda q: {
+            "agentic": True,
+            "reasoner": "openai-responses" if reasoner.enabled else "deterministic-fallback",
+            "model": reasoner.model if reasoner.enabled else None,
+            "tools": soul.tools.names(),
+            "execution_authorized": False,
+        },
+        description="Agentic Soul state and reasoning provider.",
+    )
     api.create("/memory/health", lambda q: memory.status(), description="Durable Supabase memory status.", requires_auth=False)
 
     files = Path(args.mt5_files) if args.mt5_files else default_terminal_files()
@@ -56,19 +72,21 @@ def main() -> int:
     cme = webhooks.create("cme", normalize_cme)
 
     base = f"http://{args.host}:{args.port}"
-    print("=" * 68)
-    print("  NeoFL Gateway + Agent Loop")
-    print("=" * 68)
+    print("=" * 72)
+    print("  NeoFL Gateway + Agentic Soul")
+    print("=" * 72)
     print(f"  read API      {base}/")
     print(f"  agent input   POST {base}/input")
+    print(f"  agent status  {base}/agent/status")
     print(f"  auth          {'Bearer token required' if args.token else 'DISABLED (local only)'}")
     print(f"  persistence   {'SUPABASE enabled' if memory.enabled else 'local only (configure NEOFL_SUPABASE_URL + service key)'}")
-    print("  execution     DISABLED — analysis loop only")
+    print(f"  reasoner      {'OpenAI ' + reasoner.model if reasoner.enabled else 'deterministic fail-closed fallback'}")
+    print("  execution     DISABLED — Agentic Soul is recommendation-only")
     print()
     print("  Webhooks:")
     for hook in (tv, cme):
         print(f"    {hook.name:<12} POST {base}{hook.path}")
-    print("=" * 68)
+    print("=" * 72)
 
     if bridge:
         def pump():
