@@ -20,6 +20,34 @@ NeoFL is not a collection of unrelated EAs. It is one shared framework with inde
 
 `MASTER_SPEC_v1.0.md` is superseded and retained as historical reference only.
 
+## Agentic Soul
+
+The Python AI layer is now an agentic loop rather than a keyword-only router:
+
+```text
+GOAL
+  -> PLAN
+  -> OBSERVE
+  -> SPECIALIST BRAINS
+  -> CROSS-EXAMINE
+  -> REPLAN when evidence is missing/conflicted
+  -> RISK GATE
+  -> DECIDE
+  -> REMEMBER / LEARN
+```
+
+`python/neofl_gateway/agentic.py` provides the bounded planner, task graph, tool registry, working memory, specialist passes, critic/replanning cycle, and fail-closed decision policy. `python/neofl_gateway/llm_reasoner.py` optionally connects the final synthesis to the OpenAI Responses API when `OPENAI_API_KEY` is configured. Without the key, NeoFL automatically uses deterministic fallback reasoning.
+
+The agent exposes `GET /agent/status` so the Control Room can see whether the LLM reasoner is enabled, which tools are registered, and whether execution authority is present. Execution authority remains **false** for the Agentic Soul.
+
+### Agentic evidence contract
+
+- `OK` / `DATA_OK` and `DELAYED` / `DATA_DELAYED` can be analyzed.
+- `UNKNOWN`, `UNAVAILABLE`, and `INVALID` evidence cannot be silently converted into facts.
+- Contradictions trigger a bounded re-plan before the final verdict.
+- The LLM is a reasoning/synthesis layer, not the broker authority.
+- A final recommendation never directly places an order.
+
 ## Canonical architecture
 
 ```text
@@ -132,3 +160,10 @@ MQL5 compilation is supported on the development Mac through the MetaEditor/Wine
 ## Environment
 
 Development and compilation on macOS (Apple Silicon). Live MT5 execution targets a Windows VPS/RDP host.
+
+Optional AI reasoning:
+
+```bash
+export OPENAI_API_KEY="..."
+export NEOFL_REASONING_MODEL="gpt-5.6-luna"
+```
