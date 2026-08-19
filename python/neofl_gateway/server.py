@@ -1,7 +1,7 @@
 """NeoFL gateway HTTP transport.
 
 GET endpoints expose state. POST /input is the Control Room analysis ingress. It can
-route requests through the agent loop but cannot authorize trading or place orders.
+run the Agentic Soul loop but cannot authorize trading or place orders.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ MAX_BODY_BYTES = 256 * 1024
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
-    server_version = "NeoFL-Gateway/1.1"
+    server_version = "NeoFL-Gateway/1.2"
     api: ApiRegistry
     webhooks: WebhookRegistry
     store: StateStore
@@ -94,12 +94,22 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 response = self.agent.handle(request)
                 data = self.agent.to_dict(response)
                 self.store.put_request(data)
+
+                verdict_name = str(data.get("verdict", "NO_DECISION")).upper()
+                verdict_map = {
+                    "RECOMMEND": Verdict.PROCEED,
+                    "WAIT": Verdict.DECLINE,
+                    "NO_DECISION": Verdict.BLOCKED,
+                    "ANALYZE": Verdict.PROCEED,
+                }
+                recorded_verdict = verdict_map.get(verdict_name, Verdict.ERROR)
+                quality = DataQuality.OK if verdict_name not in {"NO_DECISION"} else DataQuality.UNAVAILABLE
                 self.store.put_decision(Decision(
                     engine="Soul",
                     symbol=request.symbol or "UNSPECIFIED",
-                    verdict=Verdict.PROCEED,
-                    quality=DataQuality.OK,
-                    reason="Analysis request routed; execution authority remains disabled.",
+                    verdict=recorded_verdict,
+                    quality=quality,
+                    reason=str(data.get("answer", "Agentic cycle completed.")),
                     inputs=request.text,
                 ))
                 self._send(200, data)
