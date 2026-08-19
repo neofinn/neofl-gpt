@@ -62,12 +62,19 @@ class AgentLoop:
             except Exception:
                 context["episodic_memory"] = []
         state = self.soul.create_plan(text, symbol, request.mode, context)
-        # Preserve the routing decision made by the planner. AgenticSoul may
-        # re-plan and remove completed brain tasks, so deriving routing from the
-        # final task list would incorrectly report only the surviving tasks.
-        routed = [t.id.split(":", 1)[1] for t in state.tasks if t.id.startswith("brain:")]
+
+        # Routing is a property of the original plan, not the final task list.
+        # AgenticSoul can re-plan and remove completed brain tasks; reporting
+        # from state.tasks after run() would therefore lose the original brains.
+        routed: list[str] = []
+        for task in state.tasks:
+            if task.id.startswith("brain:"):
+                brain = task.id.split(":", 1)[1]
+                if brain not in routed:
+                    routed.append(brain)
         if "Risk Brain" not in routed:
             routed.append("Risk Brain")
+
         for item in context.get("observations") or []:
             if isinstance(item, dict):
                 state.observations.append(self._observation(item))
@@ -117,5 +124,5 @@ def sqlite_snapshot_observations(snapshot: dict[str, Any] | None, symbol: str) -
     return [
         {"source": "MT5", "claim": "market_state", "value": market, "quality": "OK", "confidence": 0.95, "evidence": ["Latest normalized MT5 bridge snapshot."]},
         {"source": "MT5", "claim": "account_state", "value": {k: account.get(k) for k in ("balance", "equity") if k in account}, "quality": "OK", "confidence": 0.95, "evidence": ["Latest MT5 account telemetry."]},
-        {"source": "MT5", "claim": "open_positions", "value": positions, "quality": "OK", "confidence": 0.95, "evidence": ["Latest MT5 position snapshot."]},
+        {"source": "MT5", "claim": "open_positions", "value": positions, "quality": "OK", "confidence": 0.95, "evidence": ["Latest MT5 position snapshot."}],
     ]
