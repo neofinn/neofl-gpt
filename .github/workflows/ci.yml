@@ -40,3 +40,5 @@ jobs:
           python-version: '3.12'
       - name: Compile Python gateway
         run: python -m compileall -q python
+      - name: Run agent loop test
+        run: python -m unittest tests.test_agent_loop
