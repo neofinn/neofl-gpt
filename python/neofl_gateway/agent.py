@@ -62,10 +62,6 @@ class AgentLoop:
             except Exception:
                 context["episodic_memory"] = []
         state = self.soul.create_plan(text, symbol, request.mode, context)
-
-        # Routing is a property of the original plan, not the final task list.
-        # AgenticSoul can re-plan and remove completed brain tasks; reporting
-        # from state.tasks after run() would therefore lose the original brains.
         routed: list[str] = []
         for task in state.tasks:
             if task.id.startswith("brain:"):
@@ -74,15 +70,15 @@ class AgentLoop:
                     routed.append(brain)
         if "Risk Brain" not in routed:
             routed.append("Risk Brain")
-
         for item in context.get("observations") or []:
             if isinstance(item, dict):
                 state.observations.append(self._observation(item))
         state = self.soul.run(state, context)
+        paper_authorized = request.mode == "paper_trade" and state.final_verdict == "RECOMMEND" and not state.contradictions
         return AgentResponse(
             request_id=state.request_id, status="accepted", mode=request.mode, routed_brains=routed,
             answer=self._answer(state, route, context), reasoning_state=state.phase, created_at=time.time(),
-            safety={"execution_authorized": False, "live_trading": False, "requires_risk_gate": True, "broker_order_authority": False, "agentic_loop": True},
+            safety={"execution_authorized": False, "paper_execution_authorized": paper_authorized, "live_trading": False, "requires_risk_gate": True, "broker_order_authority": False, "agentic_loop": True},
             instrument_route=route, plan=[asdict(t) for t in state.tasks], observations=[asdict(o) for o in state.observations],
             hypotheses=[asdict(h) for h in state.hypotheses], contradictions=state.contradictions, iterations=state.iteration,
             verdict=state.final_verdict, lessons=state.lessons,
@@ -105,7 +101,6 @@ class AgentLoop:
         return asdict(response)
 
 def sqlite_snapshot_observations(snapshot: dict[str, Any] | None, symbol: str) -> list[dict[str, Any]]:
-    """Convert the latest bridge snapshot into explicit agent evidence."""
     if not snapshot:
         return []
     raw = snapshot.get("raw")
