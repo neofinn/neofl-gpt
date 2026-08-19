@@ -28,3 +28,15 @@ jobs:
         run: npm install
       - name: Build Control Room
         run: npm run build
+
+  python-gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python gateway
+        run: python -m compileall -q python
