@@ -32,17 +32,17 @@ class BodyAuthorityTest(unittest.TestCase):
         self.assertTrue(result.allowed)
         self.assertEqual(len(store.requests), 1)
         self.assertEqual(len(store.decisions), 1)
-        self.assertIn('agentic_loop', result.response['safety'])
+        self.assertTrue(result.response['safety']['soul_authority'])
 
-    def test_execution_intent_never_gets_broker_authority(self):
+    def test_action_proposal_can_only_reach_soul(self):
         store = FakeStore()
         body = NeoFLBody(AgentLoop(), store)
-        result = body.authorize_execution_intent(
+        result = body.propose_action(
             intent={'action': 'BUY', 'symbol': 'NAS100', 'volume': 1.0},
             symbol='NAS100',
         )
         self.assertFalse(result.response['execution_authorized'])
-        self.assertEqual(result.response['execution_authority'], 'external_risk_execution_gate')
+        self.assertEqual(result.response['execution_authority'], 'none')
 
     def test_bad_external_state_is_not_admitted(self):
         store = FakeStore()
