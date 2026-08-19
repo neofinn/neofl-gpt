@@ -1,10 +1,15 @@
-"""First operational NeoFL reasoning loop with canonical instrument routing."""
+"""NeoFL Agentic Soul interface.
+
+The public AgentLoop remains backwards compatible while delegating cognition to the
+planner/observer/critic/replanner core. It never places orders.
+"""
 from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .agentic import AgenticSoul
 from .instrument_classification import classify_instrument
 
 
@@ -28,66 +33,90 @@ class AgentResponse:
     created_at: float
     safety: dict[str, Any]
     instrument_route: dict[str, Any] | None = None
+    plan: list[dict[str, Any]] = field(default_factory=list)
+    observations: list[dict[str, Any]] = field(default_factory=list)
+    hypotheses: list[dict[str, Any]] = field(default_factory=list)
+    contradictions: list[str] = field(default_factory=list)
+    iterations: int = 0
+    verdict: str = "UNRESOLVED"
+    lessons: list[str] = field(default_factory=list)
 
 
 class AgentLoop:
-    """Soul-facing router. It never places orders."""
+    """Agentic Soul: goal -> plan -> observe -> specialist -> critic -> replan -> decide."""
 
-    KEYWORDS = {
-        "Index Brain": ("index", "nas", "spx", "us30", "ger40", "uk100", "jpn225"),
-        "Option Brain": ("option", "options", "greek", "delta", "gamma", "theta", "vega", "iv"),
-        "FX Relationship": ("forex", "fx", "eurusd", "usdjpy", "jpy", "eur"),
-        "Data Arbitrage": ("latency", "arbitrage", "feed", "delay", "stale", "broker"),
-        "Experiment Brain": ("experiment", "hypothesis", "backtest", "scenario", "crash", "trap"),
-        "Risk Brain": ("risk", "drawdown", "margin", "position", "exposure", "stop"),
-        "Knowledge Brain": ("theory", "thesis", "book", "research", "learn", "study"),
-        "Trader Brains": ("trade", "entry", "long", "short", "buy", "sell", "signal", "setup"),
-    }
+    def __init__(self, soul: AgenticSoul | None = None) -> None:
+        self.soul = soul or AgenticSoul()
 
     def handle(self, request: AgentRequest) -> AgentResponse:
         text = request.text.strip()
         if not text:
             raise ValueError("request text is required")
 
-        lowered = text.lower()
-        routed = [name for name, words in self.KEYWORDS.items() if any(w in lowered for w in words)]
-        route = None
-        if request.symbol:
-            r = classify_instrument(request.symbol)
-            route = asdict(r)
-            if r.signal_domain.value == "GOLD" and "Trader Brains" not in routed:
-                routed.append("Trader Brains")
-            elif r.signal_domain.value == "FX" and "FX Relationship" not in routed:
-                routed.append("FX Relationship")
+        symbol = request.symbol or "UNSPECIFIED"
+        route = asdict(classify_instrument(request.symbol)) if request.symbol else None
+        context = dict(request.context or {})
+        context["request_id"] = request.request_id or f"neo-{int(time.time() * 1000)}"
+        state = self.soul.create_plan(text, symbol, request.mode, context)
 
-        if "Trader Brains" not in routed and request.mode in {"analyze", "trade"}:
-            routed.append("Trader Brains")
+        # Explicit caller-provided evidence is trusted only as supplied evidence.
+        # Nothing is inferred when it is absent.
+        for item in context.get("observations") or []:
+            if isinstance(item, dict):
+                state.observations.append(self._observation(item))
+
+        state = self.soul.run(state, context)
+        routed = [t.id.split(":", 1)[1] for t in state.tasks if t.id.startswith("brain:")]
         if "Risk Brain" not in routed:
             routed.append("Risk Brain")
 
-        symbol = request.symbol or "UNSPECIFIED"
-        route_text = ""
-        if route:
-            route_text = f" Instrument route: {route['signal_domain']}. {route['reason']}"
-        answer = (
-            f"NeoFL received the request for {symbol}. "
-            f"Soul routed it to: {', '.join(routed)}.{route_text} "
-            "No trade was authorized; this cycle is analysis-only."
-        )
         return AgentResponse(
-            request_id=request.request_id or f"neo-{int(time.time() * 1000)}",
+            request_id=state.request_id,
             status="accepted",
             mode=request.mode,
             routed_brains=routed,
-            answer=answer,
-            reasoning_state="ROUTED_FOR_ANALYSIS",
+            answer=self._answer(state, route),
+            reasoning_state=state.phase,
             created_at=time.time(),
             safety={
                 "execution_authorized": False,
                 "live_trading": False,
                 "requires_risk_gate": True,
+                "broker_order_authority": False,
+                "agentic_loop": True,
             },
             instrument_route=route,
+            plan=[asdict(t) for t in state.tasks],
+            observations=[asdict(o) for o in state.observations],
+            hypotheses=[asdict(h) for h in state.hypotheses],
+            contradictions=state.contradictions,
+            iterations=state.iteration,
+            verdict=state.final_verdict,
+            lessons=state.lessons,
+        )
+
+    @staticmethod
+    def _observation(item: dict[str, Any]):
+        from .agentic import Observation
+        return Observation(
+            source=str(item.get("source", "external")),
+            claim=str(item.get("claim", "evidence")),
+            value=item.get("value"),
+            quality=str(item.get("quality", "UNKNOWN")),
+            confidence=float(item.get("confidence", 0.0) or 0.0),
+            evidence=[str(x) for x in item.get("evidence", [])],
+        )
+
+    @staticmethod
+    def _answer(state, route: dict[str, Any] | None) -> str:
+        route_text = ""
+        if route:
+            route_text = f" Instrument route: {route['signal_domain']}. {route['reason']}"
+        contradiction_text = "" if not state.contradictions else f" Contradictions: {'; '.join(state.contradictions[:3])}."
+        return (
+            f"Soul completed an agentic analysis cycle for {state.symbol}. "
+            f"Verdict: {state.final_verdict}. {state.final_reason}"
+            f"{route_text}{contradiction_text} No broker execution was authorized."
         )
 
     @staticmethod
