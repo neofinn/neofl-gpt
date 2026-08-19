@@ -39,7 +39,7 @@ class AgenticSoulTest(unittest.TestCase):
         ))
         self.assertTrue(response.hypotheses)
         self.assertFalse(response.safety['execution_authorized'])
-        self.assertIn('Market Structure Brain', response.routed_brains) or self.assertIn('Trader Brains', response.routed_brains)
+        self.assertTrue({'Market Structure Brain', 'Trader Brains'} & set(response.routed_brains))
 
 
 if __name__ == '__main__':
