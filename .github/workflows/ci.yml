@@ -37,18 +37,26 @@ jobs:
   python-gateway:
     runs-on: ubuntu-latest
     env:
-      PYTHONPATH: python
+      PYTHONPATH: ${{ github.workspace }}/python
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Verify Python gateway imports
-        run: python -c "from neofl_gateway.agent import AgentLoop, AgentRequest; print('NeoFL gateway import OK')"
+        run: |
+          pwd
+          test -f python/neofl_gateway/__init__.py
+          test -f python/neofl_gateway/agent.py
+          python -c "import sys; print('Python:', sys.version); print('PYTHONPATH:', sys.path); from neofl_gateway.agent import AgentLoop, AgentRequest; print('NeoFL gateway import OK')"
+
       - name: Compile Python gateway and tests
         run: python -m compileall -q python tests
+
       - name: Run Python gateway test suite
         run: python -m unittest discover -s tests -p 'test_*.py' -v
