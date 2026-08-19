@@ -1,15 +1,11 @@
-"""First operational NeoFL reasoning loop.
-
-This is deliberately a deterministic orchestration kernel, not an LLM. It accepts a
-Control Room request, classifies which specialist domains are relevant, records a
-provenance decision, and returns a structured response. LLM providers and specialist
-brains can be attached behind this stable boundary later.
-"""
+"""First operational NeoFL reasoning loop with canonical instrument routing."""
 from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+from .instrument_classification import classify_instrument
 
 
 @dataclass
@@ -31,13 +27,11 @@ class AgentResponse:
     reasoning_state: str
     created_at: float
     safety: dict[str, Any]
+    instrument_route: dict[str, Any] | None = None
 
 
 class AgentLoop:
-    """The first Soul-facing router.
-
-    It does not place orders. Execution is intentionally outside this loop.
-    """
+    """Soul-facing router. It never places orders."""
 
     KEYWORDS = {
         "Index Brain": ("index", "nas", "spx", "us30", "ger40", "uk100", "jpn225"),
@@ -57,16 +51,27 @@ class AgentLoop:
 
         lowered = text.lower()
         routed = [name for name, words in self.KEYWORDS.items() if any(w in lowered for w in words)]
+        route = None
+        if request.symbol:
+            r = classify_instrument(request.symbol)
+            route = asdict(r)
+            if r.signal_domain.value == "GOLD" and "Trader Brains" not in routed:
+                routed.append("Trader Brains")
+            elif r.signal_domain.value == "FX" and "FX Relationship" not in routed:
+                routed.append("FX Relationship")
+
         if "Trader Brains" not in routed and request.mode in {"analyze", "trade"}:
             routed.append("Trader Brains")
         if "Risk Brain" not in routed:
             routed.append("Risk Brain")
 
         symbol = request.symbol or "UNSPECIFIED"
-        state = "ROUTED_FOR_ANALYSIS"
+        route_text = ""
+        if route:
+            route_text = f" Instrument route: {route['signal_domain']}. {route['reason']}"
         answer = (
             f"NeoFL received the request for {symbol}. "
-            f"Soul routed it to: {', '.join(routed)}. "
+            f"Soul routed it to: {', '.join(routed)}.{route_text} "
             "No trade was authorized; this cycle is analysis-only."
         )
         return AgentResponse(
@@ -75,13 +80,14 @@ class AgentLoop:
             mode=request.mode,
             routed_brains=routed,
             answer=answer,
-            reasoning_state=state,
+            reasoning_state="ROUTED_FOR_ANALYSIS",
             created_at=time.time(),
             safety={
                 "execution_authorized": False,
                 "live_trading": False,
                 "requires_risk_gate": True,
             },
+            instrument_route=route,
         )
 
     @staticmethod
