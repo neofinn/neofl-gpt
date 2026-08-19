@@ -23,6 +23,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -42,17 +45,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Verify Python gateway imports
+      - name: Verify checkout and Python gateway imports
         run: |
-          pwd
+          set -euxo pipefail
+          echo "CI commit: $(git rev-parse HEAD)"
+          echo "CI branch: $(git branch --show-current || true)"
+          git status --short
           test -f python/neofl_gateway/__init__.py
           test -f python/neofl_gateway/agent.py
+          python -m py_compile python/neofl_gateway/agent.py
           python -c "import sys; print('Python:', sys.version); print('PYTHONPATH:', sys.path); from neofl_gateway.agent import AgentLoop, AgentRequest; print('NeoFL gateway import OK')"
 
       - name: Compile Python gateway and tests
