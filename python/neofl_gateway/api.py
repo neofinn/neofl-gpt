@@ -101,6 +101,11 @@ class StateStore:
     def requests(self, limit: int = 100) -> list[dict[str, Any]]:
         return self._requests[-limit:]
 
+    def execution_reports(self, limit: int = 100) -> list[dict[str, Any]]:
+        if not self.memory:
+            return []
+        return self.memory.execution_reports(limit)
+
 
 def build_default_api(store: StateStore, token: str | None = None) -> ApiRegistry:
     api = ApiRegistry(token=token)
@@ -109,5 +114,6 @@ def build_default_api(store: StateStore, token: str | None = None) -> ApiRegistr
     api.create("/events", lambda q: store.events(int(q.get("limit", 100))), description="Recent normalized market events.")
     api.create("/decisions", lambda q: store.decisions(int(q.get("limit", 100))), description="Recent engine decisions with provenance.")
     api.create("/requests", lambda q: store.requests(int(q.get("limit", 100))), description="Recent Control Room agent requests and responses.")
+    api.create("/execution-reports", lambda q: store.execution_reports(int(q.get("limit", 100))), description="Execution reports enriched with account, trade data, running PnL and rejection reasons.")
     api.create("/", lambda q: {"service": "NeoFL Gateway", "endpoints": api.describe()}, description="Endpoint index.", requires_auth=False)
     return api
