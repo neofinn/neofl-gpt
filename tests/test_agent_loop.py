@@ -19,6 +19,20 @@ class AgentLoopTest(unittest.TestCase):
         self.assertIn('Risk Brain', response.routed_brains)
         self.assertFalse(response.safety['execution_authorized'])
 
+    def test_routing_is_preserved_when_agent_replans(self):
+        response = AgentLoop().handle(AgentRequest(
+            text='Analyze NAS100 options and compare index movement with Greeks.',
+            symbol='NAS100',
+        ))
+        # AgenticSoul may re-plan and remove completed brain tasks. The public
+        # routing contract must still report every specialist selected by the
+        # original plan.
+        self.assertGreaterEqual(response.iterations, 1)
+        self.assertIn('Index Brain', response.routed_brains)
+        self.assertIn('Option Brain', response.routed_brains)
+        self.assertIn('Risk Brain', response.routed_brains)
+        self.assertFalse(response.safety['execution_authorized'])
+
 
 if __name__ == '__main__':
     unittest.main()
