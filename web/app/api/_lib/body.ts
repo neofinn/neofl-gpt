@@ -4,41 +4,55 @@ import { NextRequest, NextResponse } from 'next/server';
 // binding token; the gateway address is an application-side constant.
 const gateway = 'https://neofl-execution-gateway-1li631.v2.appdeploy.ai';
 
-function upstreamUrl(upstreamPath: string) {
+function upstreamTarget(upstreamPath: string, incomingMethod: string) {
   const bodyPaths = ['/handshake', '/heartbeat', '/telemetry', '/market-state'];
+  if (incomingMethod === 'GET' && upstreamPath === '/execution/next') return '/api/v1/mt5/bridge';
+  if (incomingMethod === 'GET' && upstreamPath === '/execution-report') return '/api/v1/execution-report';
   const prefix = bodyPaths.includes(upstreamPath) ? '/api/v1/body' : '/api/v1';
-  return `${gateway}${prefix}${upstreamPath}`;
+  return `${prefix}${upstreamPath}`;
 }
 
 export async function bodyProxy(request: NextRequest, upstreamPath: string, method: 'GET' | 'POST' = request.method as 'GET' | 'POST') {
-  // Accept the canonical header first, then the same binding token in the
-  // request body/query for compatibility with MT5 WebRequest implementations.
   let rawBody: string | undefined;
-  let bodyToken = '';
+  let parsedBody: Record<string, unknown> = {};
   if (method !== 'GET') {
     rawBody = await request.text();
     if (rawBody) {
       try {
         const parsed = JSON.parse(rawBody);
-        bodyToken = typeof parsed?.binding_token === 'string' ? parsed.binding_token.trim() : '';
-      } catch {
-        bodyToken = '';
-      }
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) parsedBody = parsed;
+      } catch {}
     }
+  } else {
+    request.nextUrl.searchParams.forEach((value, key) => { parsedBody[key] = value; });
   }
-  const binding = request.headers.get('x-neofl-binding-token')?.trim() || bodyToken || request.nextUrl.searchParams.get('binding_token')?.trim() || '';
+
+  const binding = request.headers.get('x-neofl-binding-token')?.trim() || (typeof parsedBody.binding_token === 'string' ? parsedBody.binding_token.trim() : '');
   if (!binding) return NextResponse.json({ error: 'Binding token required' }, { status: 401 });
 
   const headers = new Headers();
-  headers.set('Content-Type', request.headers.get('content-type') || 'application/json');
+  headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json');
   headers.set('X-NeoFL-Binding-Token', binding);
 
-  const url = new URL(upstreamUrl(upstreamPath));
-  request.nextUrl.searchParams.forEach((value, key) => url.searchParams.set(key, value));
+  const incomingGet = method === 'GET';
+  let upstreamMethod: 'GET' | 'POST' = method;
+  let body = rawBody;
+  if (incomingGet && ['/handshake', '/heartbeat', '/telemetry', '/market-state', '/execution-report', '/execution/next'].includes(upstreamPath)) {
+    upstreamMethod = 'POST';
+    if (upstreamPath === '/execution/next') parsedBody.operation = 'execution_next';
+    body = JSON.stringify(parsedBody);
+  }
+
+  const url = new URL(`${gateway}${upstreamTarget(upstreamPath, method)}`);
+  if (!incomingGet || upstreamPath === '/execution/next' || upstreamPath === '/execution-report') {
+    // Query parameters are represented in the JSON body for normalized POST transport.
+  } else {
+    request.nextUrl.searchParams.forEach((value, key) => url.searchParams.set(key, value));
+  }
 
   try {
-    const response = await fetch(url.toString(), { method, headers, body: rawBody, cache: 'no-store' });
+    const response = await fetch(url.toString(), { method: upstreamMethod, headers, body, cache: 'no-store' });
     const text = await response.text();
     return new NextResponse(text, {
       status: response.status,
