@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// NeoFL Body always targets the existing execution gateway. The MT5 binding token
-// remains the only user-supplied credential; no gateway URL is required in MT5.
+// NeoFL Body proxy targets the existing execution gateway. MT5 supplies only the
+// binding token; the gateway address is an application-side constant.
 const gateway = 'https://neofl-execution-gateway-1li631.v2.appdeploy.ai';
+
+function upstreamUrl(upstreamPath: string) {
+  const bodyPaths = ['/handshake', '/heartbeat', '/telemetry', '/market-state'];
+  const prefix = bodyPaths.includes(upstreamPath) ? '/api/v1/body' : '/api/v1';
+  return `${gateway}${prefix}${upstreamPath}`;
+}
 
 export async function bodyProxy(request: NextRequest, upstreamPath: string, method: 'GET' | 'POST' = request.method as 'GET' | 'POST') {
   const binding = request.headers.get('x-neofl-binding-token')?.trim() || '';
@@ -10,9 +16,10 @@ export async function bodyProxy(request: NextRequest, upstreamPath: string, meth
 
   const headers = new Headers();
   headers.set('Content-Type', request.headers.get('content-type') || 'application/json');
+  headers.set('Accept', 'application/json');
   headers.set('X-NeoFL-Binding-Token', binding);
 
-  const url = new URL(`${gateway}${upstreamPath}`);
+  const url = new URL(upstreamUrl(upstreamPath));
   request.nextUrl.searchParams.forEach((value, key) => url.searchParams.set(key, value));
 
   let body: string | undefined;
