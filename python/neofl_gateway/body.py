@@ -15,7 +15,7 @@ class BodyAction:
     response: dict[str, Any]
 
 class NeoFLBody:
-    """Physical/runtime layer. Soul decides; Body carries state and queued intent."""
+    """Physical/runtime layer. Brain/Soul owns trading authority; Body transports state."""
     def __init__(self, agent: AgentLoop, store, order_queue: OrderIntentQueue | None = None) -> None:
         self.agent = agent
         self.store = store
@@ -44,31 +44,34 @@ class NeoFLBody:
         return result
 
     def propose_action(self, *, intent: dict[str, Any], symbol: str | None = None) -> BodyAction:
-        """Evaluate and, when the Brain explicitly proposes an entry, queue OrderIntent.
+        """Evaluate a Brain proposal and queue an authorized OrderIntent.
 
-        Queuing is not execution. Risk/Straddle/Bucket management is deliberately
-        absent here and starts only after a confirmed broker fill.
+        The Brain is the execution authority. MT5_EXECUTIONER is only the
+        actuator that consumes an authorized intent. Risk/Straddle/Bucket
+        management starts after the broker confirms the fill.
         """
         request = AgentRequest(
-            text="Evaluate this proposed entry and return the Brain's decision. Do not execute it directly.",
+            text="Evaluate this proposed entry and return the Brain's decision. If approved, authorize the actual entry and return an OrderIntent.",
             symbol=symbol,
             mode="trade",
             context={"observations": [{"source": "body_action_proposal", "claim": "proposed_action", "value": intent, "quality": "OK", "confidence": 1.0, "evidence": ["Proposal entered through Body."]}]},
         )
         result = self.think(request)
         data = dict(result.response)
-        data["execution_authorized"] = False
-        data["execution_authority"] = "MT5_EXECUTIONER"
-
-        # The Brain may explicitly return an OrderIntent candidate. Only a
-        # positive trade verdict can put it into the queue.
         verdict = str(data.get("verdict", "NO_DECISION")).upper()
         candidate = data.get("order_intent") or intent
-        if result.allowed and verdict in {"PROCEED", "RECOMMEND"} and isinstance(candidate, dict):
+        approved = result.allowed and verdict in {"PROCEED", "RECOMMEND"}
+
+        data["execution_authorized"] = bool(approved)
+        data["execution_authority"] = "BRAIN" if approved else "none"
+        data["execution_actuator"] = "MT5_EXECUTIONER"
+        data["queued"] = False
+
+        if approved and isinstance(candidate, dict):
             try:
                 queued = OrderIntent(
                     symbol=str(candidate.get("symbol") or symbol or ""),
-                    side=str(candidate.get("side") or candidate.get("direction") or "").upper(),
+                    side=str(candidate.get("side") or candidate.get("direction") or candidate.get("action") or "").upper(),
                     volume=float(candidate.get("volume") or candidate.get("lots") or 0),
                     intent_type=str(candidate.get("intent_type", "MARKET")),
                     requested_price=candidate.get("requested_price"),
@@ -81,10 +84,9 @@ class NeoFLBody:
                 data["order_intent"] = queued.to_dict()
                 data["queued"] = True
             except (TypeError, ValueError) as exc:
-                data["queued"] = False
+                data["execution_authorized"] = False
+                data["execution_authority"] = "none"
                 data["queue_error"] = str(exc)
-        else:
-            data["queued"] = False
         return BodyAction(result.allowed, result.reason, data)
 
     def queue_snapshot(self) -> list[dict[str, Any]]:
