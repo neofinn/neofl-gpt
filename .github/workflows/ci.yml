@@ -1,17 +1,17 @@
-name: NeoFL CI
+name: NeoFL Parallel CI
 
 on:
   push:
-    branches: [main]
+    branches: [neoflgpt-parallel]
   pull_request:
-    branches: [main]
+    branches: [neoflgpt-parallel]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: neofl-ci-${{ github.ref }}
+  group: neofl-parallel-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -48,25 +48,21 @@ jobs:
         with:
           clean: true
           fetch-depth: 0
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Verify checkout and Python gateway imports
+      - name: Verify Python gateway source
         run: |
           set -euxo pipefail
           echo "CI commit: $(git rev-parse HEAD)"
           echo "CI branch: $(git branch --show-current || true)"
-          git status --short
           test -f python/neofl_gateway/__init__.py
           test -f python/neofl_gateway/agent.py
           python -m py_compile python/neofl_gateway/agent.py
-          python -c "import sys; print('Python:', sys.version); print('PYTHONPATH:', sys.path); from neofl_gateway.agent import AgentLoop, AgentRequest; print('NeoFL gateway import OK')"
-
-      - name: Compile Python gateway and tests
+      - name: Verify gateway import
+        run: python -c "from neofl_gateway.agent import AgentLoop, AgentRequest; print('NeoFL gateway import OK')"
+      - name: Compile all Python
         run: python -m compileall -q python tests
-
-      - name: Run Python gateway test suite
+      - name: Run all Python tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v

@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "metaeditor": {
+      "type": "http",
+      "url": "http://127.0.0.1:22345/mcp",
+      "headers": {
+        "Authorization": "Bearer ${NEOFL_META_MCP_TOKEN}"
+      }
+    },
+    "terminal": {
+      "type": "http",
+      "url": "http://127.0.0.1:22346/mcp",
+      "headers": {
+        "Authorization": "Bearer ${NEOFL_META_MCP_TOKEN}"
+      }
+    },
+    "marketdata": {
+      "type": "http",
+      "url": "https://www.metatrader.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${NEOFL_MARKETDATA_MCP_TOKEN}"
+      }
+    }
+  }
+}

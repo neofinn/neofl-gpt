@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
-from .agentic import AgenticSoul
+from .soul import CognitiveSoul
 from .instrument_classification import classify_instrument
 
 @dataclass
@@ -35,13 +35,15 @@ class AgentResponse:
     iterations: int = 0
     verdict: str = "UNRESOLVED"
     lessons: list[str] = field(default_factory=list)
+    introspection: dict[str, Any] = field(default_factory=dict)
 
 class AgentLoop:
-    """Agentic Soul: goal -> plan -> observe -> specialist -> critic -> replan -> decide."""
-    def __init__(self, soul: AgenticSoul | None = None, context_provider: Callable[[str], list[dict[str, Any]]] | None = None, memory_provider: Callable[[str], list[dict[str, Any]]] | None = None) -> None:
-        self.soul = soul or AgenticSoul()
+    """Public gateway into the Soul. It does not own execution authority."""
+    def __init__(self, soul: CognitiveSoul | None = None, context_provider: Callable[[str], list[dict[str, Any]]] | None = None, memory_provider: Callable[[str], list[dict[str, Any]]] | None = None) -> None:
+        self.soul = soul or CognitiveSoul()
         self.context_provider = context_provider
-        self.memory_provider = memory_provider
+        if memory_provider:
+            self.soul.memory.provider = memory_provider
 
     def handle(self, request: AgentRequest) -> AgentResponse:
         text = request.text.strip()
@@ -56,16 +58,7 @@ class AgentLoop:
                 context["observations"] = self.context_provider(request.symbol) or []
             except Exception:
                 context["observations"] = []
-        if self.memory_provider and request.symbol:
-            try:
-                context["episodic_memory"] = self.memory_provider(request.symbol) or []
-            except Exception:
-                context["episodic_memory"] = []
         state = self.soul.create_plan(text, symbol, request.mode, context)
-
-        # Routing is a property of the original plan, not the final task list.
-        # AgenticSoul can re-plan and remove completed brain tasks; reporting
-        # from state.tasks after run() would therefore lose the original brains.
         routed: list[str] = []
         for task in state.tasks:
             if task.id.startswith("brain:"):
@@ -74,7 +67,6 @@ class AgentLoop:
                     routed.append(brain)
         if "Risk Brain" not in routed:
             routed.append("Risk Brain")
-
         for item in context.get("observations") or []:
             if isinstance(item, dict):
                 state.observations.append(self._observation(item))
@@ -82,10 +74,10 @@ class AgentLoop:
         return AgentResponse(
             request_id=state.request_id, status="accepted", mode=request.mode, routed_brains=routed,
             answer=self._answer(state, route, context), reasoning_state=state.phase, created_at=time.time(),
-            safety={"execution_authorized": False, "live_trading": False, "requires_risk_gate": True, "broker_order_authority": False, "agentic_loop": True},
+            safety={"execution_authorized": False, "live_trading": False, "broker_order_authority": False, "agentic_loop": True, "soul_authority": True},
             instrument_route=route, plan=[asdict(t) for t in state.tasks], observations=[asdict(o) for o in state.observations],
             hypotheses=[asdict(h) for h in state.hypotheses], contradictions=state.contradictions, iterations=state.iteration,
-            verdict=state.final_verdict, lessons=state.lessons,
+            verdict=state.final_verdict, lessons=state.lessons, introspection=self.soul.introspect(state),
         )
 
     @staticmethod
@@ -97,15 +89,14 @@ class AgentLoop:
     def _answer(state, route: dict[str, Any] | None, context: dict[str, Any]) -> str:
         route_text = "" if not route else f" Instrument route: {route['signal_domain']}. {route['reason']}"
         contradiction_text = "" if not state.contradictions else f" Contradictions: {'; '.join(state.contradictions[:3])}."
-        memory_text = " Prior episodic memory was supplied." if context.get("episodic_memory") else ""
-        return f"Soul completed an agentic analysis cycle for {state.symbol}. Verdict: {state.final_verdict}. {state.final_reason}{route_text}{contradiction_text}{memory_text} No broker execution was authorized."
+        memory_text = " Prior episodic memory was supplied." if context.get("memory") or context.get("episodic_memory") else ""
+        return f"Soul completed an agentic cognition cycle for {state.symbol}. Verdict: {state.final_verdict}. {state.final_reason}{route_text}{contradiction_text}{memory_text} No broker execution authority exists in this layer."
 
     @staticmethod
     def to_dict(response: AgentResponse) -> dict[str, Any]:
         return asdict(response)
 
 def sqlite_snapshot_observations(snapshot: dict[str, Any] | None, symbol: str) -> list[dict[str, Any]]:
-    """Convert the latest bridge snapshot into explicit agent evidence."""
     if not snapshot:
         return []
     raw = snapshot.get("raw")
@@ -124,5 +115,5 @@ def sqlite_snapshot_observations(snapshot: dict[str, Any] | None, symbol: str) -
     return [
         {"source": "MT5", "claim": "market_state", "value": market, "quality": "OK", "confidence": 0.95, "evidence": ["Latest normalized MT5 bridge snapshot."]},
         {"source": "MT5", "claim": "account_state", "value": {k: account.get(k) for k in ("balance", "equity") if k in account}, "quality": "OK", "confidence": 0.95, "evidence": ["Latest MT5 account telemetry."]},
-        {"source": "MT5", "claim": "open_positions", "value": positions, "quality": "OK", "confidence": 0.95, "evidence": ["Latest MT5 position snapshot."}],
+        {"source": "MT5", "claim": "open_positions", "value": positions, "quality": "OK", "confidence": 0.95, "evidence": ["Latest MT5 position snapshot."]},
     ]
