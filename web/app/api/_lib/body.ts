@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// NeoFL Body proxy targets the existing execution gateway. MT5 supplies only the
+// NeoFL Body proxy targets the existing execution gateway. MT5 supplies the
 // binding token; the gateway address is an application-side constant.
 const gateway = 'https://neofl-execution-gateway-1li631.v2.appdeploy.ai';
 
@@ -11,7 +11,22 @@ function upstreamUrl(upstreamPath: string) {
 }
 
 export async function bodyProxy(request: NextRequest, upstreamPath: string, method: 'GET' | 'POST' = request.method as 'GET' | 'POST') {
-  const binding = request.headers.get('x-neofl-binding-token')?.trim() || '';
+  // Accept the canonical header first, then the same binding token in the
+  // request body/query for compatibility with MT5 WebRequest implementations.
+  let rawBody: string | undefined;
+  let bodyToken = '';
+  if (method !== 'GET') {
+    rawBody = await request.text();
+    if (rawBody) {
+      try {
+        const parsed = JSON.parse(rawBody);
+        bodyToken = typeof parsed?.binding_token === 'string' ? parsed.binding_token.trim() : '';
+      } catch {
+        bodyToken = '';
+      }
+    }
+  }
+  const binding = request.headers.get('x-neofl-binding-token')?.trim() || bodyToken || request.nextUrl.searchParams.get('binding_token')?.trim() || '';
   if (!binding) return NextResponse.json({ error: 'Binding token required' }, { status: 401 });
 
   const headers = new Headers();
@@ -22,11 +37,8 @@ export async function bodyProxy(request: NextRequest, upstreamPath: string, meth
   const url = new URL(upstreamUrl(upstreamPath));
   request.nextUrl.searchParams.forEach((value, key) => url.searchParams.set(key, value));
 
-  let body: string | undefined;
-  if (method !== 'GET') body = await request.text();
-
   try {
-    const response = await fetch(url.toString(), { method, headers, body, cache: 'no-store' });
+    const response = await fetch(url.toString(), { method, headers, body: rawBody, cache: 'no-store' });
     const text = await response.text();
     return new NextResponse(text, {
       status: response.status,
