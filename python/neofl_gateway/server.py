@@ -16,7 +16,7 @@ log = logging.getLogger("neofl.gateway")
 MAX_BODY_BYTES = 256 * 1024
 
 class GatewayHandler(BaseHTTPRequestHandler):
-    server_version = "NeoFL-Gateway/1.5"
+    server_version = "NeoFL-Gateway/1.6"
     api: ApiRegistry; webhooks: WebhookRegistry; store: StateStore; agent: AgentLoop; body: NeoFLBody; runtime: NeoFLAgentRuntime
     brains: BrainRegistry; telemetry: TelemetryRegistry
 
@@ -37,6 +37,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path in {"/admin/brains","/admin/accounts"}:
             if not self._auth(): self.send_response(401); self.end_headers(); return
             self._send(200, self.brains.snapshot() if path.endswith("brains") else self.telemetry.snapshot()); return
+        if path == "/admin/brain-routing":
+            if not self._auth(): self.send_response(401); self.end_headers(); return
+            self._send(200, self.brains.snapshot()); return
         if path == "/mt5/status":
             if not self._auth(): self.send_response(401); self.end_headers(); return
             self._send(200,{"accounts":self.telemetry.snapshot(),"brains":self.brains.snapshot()}); return
@@ -55,6 +58,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
         try: payload=self._json()
         except (ValueError, json.JSONDecodeError) as exc: self._error(400,str(exc)); return
 
+        if path == "/admin/brain/global-switch":
+            if not self._auth(): self.send_response(401); self.end_headers(); return
+            try:
+                deployment=str(payload["brain"] or payload["deployment"])
+                resolved=self.brains.set_default(deployment)
+                self._send(200,{"global":deployment,"deployment":resolved.__dict__,"routing":self.brains.snapshot()})
+            except (KeyError,ValueError) as exc: self._error(400,str(exc))
+            return
+
         if path in {"/admin/brain/switch","/admin/brain/assign"}:
             if not self._auth(): self.send_response(401); self.end_headers(); return
             try:
@@ -62,6 +74,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 binding=self.brains.assign(account,deployment); resolved=self.brains.resolve(account)
                 state=self.telemetry.heartbeat({"account_id":account,"brain":deployment}, {"name":resolved.name,"branch":resolved.branch,"build":resolved.build,"endpoint":resolved.endpoint})
                 self._send(200,{"binding":binding.__dict__,"deployment":resolved.__dict__,"account":state})
+            except (KeyError,ValueError) as exc: self._error(400,str(exc))
+            return
+
+        if path == "/admin/brain/use-global":
+            if not self._auth(): self.send_response(401); self.end_headers(); return
+            try:
+                account=str(payload["account_id"]); self.brains.clear_assignment(account); resolved=self.brains.resolve(account)
+                self._send(200,{"account_id":account,"routing":"GLOBAL","deployment":resolved.__dict__})
             except (KeyError,ValueError) as exc: self._error(400,str(exc))
             return
 
@@ -112,7 +132,7 @@ def _mcp_client_from_environment():
 
 def make_server(api,webhooks,store,agent,host="127.0.0.1",port=8787):
     body=NeoFLBody(agent,store); runtime=NeoFLAgentRuntime(agent,_mcp_client_from_environment())
-    brains=BrainRegistry([BrainDeployment("MAIN","main",os.getenv("NEOFL_MAIN_BUILD","unknown"),os.getenv("NEOFL_MAIN_BRAIN_URL","")),BrainDeployment("PARALLEL","neoflgpt-parallel",os.getenv("NEOFL_PARALLEL_BUILD","unknown"),os.getenv("NEOFL_PARALLEL_BRAIN_URL",""))])
+    brains=BrainRegistry([BrainDeployment("MAIN","main",os.getenv("NEOFL_MAIN_BUILD","unknown"),os.getenv("NEOFL_MAIN_BRAIN_URL","")),BrainDeployment("PARALLEL","neoflgpt-parallel",os.getenv("NEOFL_PARALLEL_BUILD","unknown"),os.getenv("NEOFL_PARALLEL_BRAIN_URL", ""))], default=os.getenv("NEOFL_DEFAULT_BRAIN","MAIN"))
     telemetry=TelemetryRegistry()
     handler=type("BoundGatewayHandler",(GatewayHandler,),{"api":api,"webhooks":webhooks,"store":store,"agent":agent,"body":body,"runtime":runtime,"brains":brains,"telemetry":telemetry})
     return ThreadingHTTPServer((host,port),handler)
