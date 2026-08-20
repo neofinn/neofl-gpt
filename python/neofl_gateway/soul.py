@@ -1,8 +1,9 @@
 """NeoFL cognitive Soul.
 
-The Soul is the only cognitive authority.  It owns goals, working memory,
-long-term memory hooks, tool selection, specialist delegation, criticism,
-replanning and final decisions.  It never owns broker execution.
+The Soul is the only cognitive authority. It owns goals, working memory,
+long-term memory hooks, coding memory, self-repair planning, tool selection,
+specialist delegation, criticism, replanning and final decisions. It never owns
+broker execution.
 """
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
 from .agentic import AgenticSoul, AgentState, Observation, Task
+from .coding_memory import CodingMemory
+from .python_coder import PythonCoder, RepairPlan, CodePatchProposal
 
 
 @dataclass
@@ -34,7 +37,7 @@ class MemoryRecord:
 
 
 class SoulMemory:
-    """Small deterministic memory layer; an external persistent store can be attached later."""
+    """Small deterministic working memory; persistent stores can be attached later."""
     def __init__(self, provider: Callable[[str], list[dict[str, Any]]] | None = None, limit: int = 500) -> None:
         self.provider = provider
         self.limit = limit
@@ -97,10 +100,12 @@ class Replanner:
 
 
 class CognitiveSoul(AgenticSoul):
-    """Autonomous cognition loop: perceive -> plan -> investigate -> delegate -> critique -> replan -> decide -> learn."""
-    def __init__(self, tools=None, reasoner=None, memory: SoulMemory | None = None) -> None:
+    """Autonomous cognition plus an internal coding/repair capability."""
+    def __init__(self, tools=None, reasoner=None, memory: SoulMemory | None = None, coding_memory: CodingMemory | None = None) -> None:
         super().__init__(tools=tools, reasoner=reasoner)
         self.memory = memory or SoulMemory()
+        self.coding_memory = coding_memory or CodingMemory()
+        self.coder = PythonCoder(self.coding_memory)
         self.goals = GoalManager()
         self.council = SpecialistCouncil()
         self.critic = CriticEngine()
@@ -115,7 +120,6 @@ class CognitiveSoul(AgenticSoul):
         return super().create_plan(text, symbol, mode, context)
 
     def run(self, state: AgentState, context: dict[str, Any]) -> AgentState:
-        # Bound the loop, but let the Soul choose another observation/critic pass when needed.
         state.max_iterations = min(max(state.max_iterations, 3), 5)
         for cycle in range(state.max_iterations):
             state.iteration = cycle + 1
@@ -135,8 +139,6 @@ class CognitiveSoul(AgenticSoul):
             for issue in issues:
                 if issue not in state.contradictions:
                     state.contradictions.append(issue)
-
-            # The Soul decides whether another cognitive action is warranted.
             if issues and cycle + 1 < state.max_iterations:
                 state.phase = "REPLANNING"
                 self.replanner.replan(state, issues)
@@ -158,6 +160,18 @@ class CognitiveSoul(AgenticSoul):
         })
         return state
 
+    def diagnose_code(self, *, issue: str, files: dict[str, str], failures: list[str] | None = None) -> dict[str, Any]:
+        """Let the Brain inspect a supplied code snapshot and coding history."""
+        return self.coder.diagnose(issue=issue, files=files, failures=failures or [])
+
+    def plan_code_repair(self, *, issue: str, targets: list[str], validations: list[str]) -> RepairPlan:
+        return self.coder.plan_repair(issue=issue, targets=targets, validations=validations)
+
+    def propose_code_patch(self, *, target: str, old_content: str, new_content: str, summary: str, validation: list[str]) -> CodePatchProposal:
+        proposal = self.coder.propose_patch(target=target, old_content=old_content, new_content=new_content, summary=summary, validation=validation)
+        self.coding_memory.remember(kind="fix", target=target, lesson=summary, evidence=list(validation), success=None)
+        return proposal
+
     def introspect(self, state: AgentState) -> dict[str, Any]:
         return {
             "goal": state.goal,
@@ -168,5 +182,8 @@ class CognitiveSoul(AgenticSoul):
             "hypotheses": len(state.hypotheses),
             "contradictions": list(state.contradictions),
             "memory_available": len(self.memory.recall(state.symbol or "UNSPECIFIED")),
+            "coding_memory_available": len(self.coding_memory.recall(limit=50)),
+            "python_coder": True,
+            "self_repair_mode": "PROPOSE_VALIDATE_ROLLBACK",
             "verdict": state.final_verdict,
         }
