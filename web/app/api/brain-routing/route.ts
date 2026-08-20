@@ -24,6 +24,6 @@ export async function POST(request: NextRequest) {
   const parsed = JSON.parse(body || '{}');
   const scope = parsed.scope || 'account';
   if (scope === 'global') return proxy('/admin/brain/global-switch', { method: 'POST', body });
-  if (scope === 'global-reset') return proxy('/admin/brain/use-global', { method: 'POST', body });
+  if (scope === 'account-global') return proxy('/admin/brain/use-global', { method: 'POST', body });
   return proxy('/admin/brain/switch', { method: 'POST', body });
 }
