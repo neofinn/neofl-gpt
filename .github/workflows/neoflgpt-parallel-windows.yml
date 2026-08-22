@@ -1,0 +1,110 @@
+name: NeoFLGPT Parallel Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [neoflgpt-parallel]
+    paths:
+      - 'desktop/**'
+      - 'python/neofl_gateway/local_brain.py'
+      - '.github/workflows/neoflgpt-parallel-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: neoflgpt-parallel
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+
+      - name: Compile Python sources
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}\python
+        run: |
+          python -m compileall -q python desktop
+
+      - name: Build desktop executable
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}\python
+        run: |
+          pyinstaller --noconfirm --clean --windowed --onefile `
+            --name NeoFLGPT_Parallel `
+            --paths python `
+            desktop\NeoFLGPT_Parallel_Local.py
+
+      - name: Create portable release package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item dist\NeoFLGPT_Parallel.exe release\NeoFLGPT_Parallel.exe
+          @'
+          NeoFLGPT Parallel
+          
+          This is the Windows desktop application.
+          On first launch configure a REAL local model backend under Brain Settings.
+          Default backend: Ollama at http://127.0.0.1:11434.
+          
+          The application will explicitly report LOCAL MODEL NOT READY until a real
+          model is installed. No fake model or fake inference is bundled.
+          '@ | Set-Content release\README.txt
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          @'
+          [Setup]
+          AppName=NeoFLGPT Parallel
+          AppVersion=1.0.0
+          DefaultDirName={autopf}\NeoFLGPT Parallel
+          DefaultGroupName=NeoFLGPT Parallel
+          OutputDir=release
+          OutputBaseFilename=NeoFLGPT_Parallel_Setup
+          Compression=lzma
+          SolidCompression=yes
+          ArchitecturesInstallIn64BitMode=x64
+          Uninstallable=yes
+          [Files]
+          Source: "dist\NeoFLGPT_Parallel.exe"; DestDir: "{app}"; Flags: ignoreversion
+          [Icons]
+          Name: "{group}\NeoFLGPT Parallel"; Filename: "{app}\NeoFLGPT_Parallel.exe"
+          Name: "{commondesktop}\NeoFLGPT Parallel"; Filename: "{app}\NeoFLGPT_Parallel.exe"
+          [Run]
+          Filename: "{app}\NeoFLGPT_Parallel.exe"; Description: "Launch NeoFLGPT Parallel"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content installer.iss
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer.iss
+
+      - name: Verify release files
+        shell: pwsh
+        run: |
+          if (!(Test-Path release\NeoFLGPT_Parallel.exe)) { throw 'EXE missing' }
+          if (!(Test-Path release\NeoFLGPT_Parallel_Setup.exe)) { throw 'Installer missing' }
+          Get-Item release\NeoFLGPT_Parallel.exe,release\NeoFLGPT_Parallel_Setup.exe | Format-List Name,Length,FullName
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeoFLGPT-Parallel-Windows
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
