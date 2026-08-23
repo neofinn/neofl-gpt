@@ -4,6 +4,7 @@ WORKDIR /app
 COPY python/requirements.txt /app/python/requirements.txt
 RUN pip install --no-cache-dir -r /app/python/requirements.txt
 COPY python /app/python
+RUN mkdir -p /app/state
 
 ENV PYTHONUNBUFFERED=1
 ENV NEOFL_REASONER=auto
@@ -12,4 +13,4 @@ ENV NEOFL_REASONING_MODEL=qwen3:8b
 
 EXPOSE 8787
 
-CMD ["sh", "-c", "python /app/python/run_gateway.py --host 0.0.0.0 --port 8787 --token \"$NEOFL_GATEWAY_TOKEN\""]
+CMD ["sh", "-c", "python /app/python/run_gateway.py --host 0.0.0.0 --port 8787 --db /app/state/neofl.db --memory-db /app/state/neofl_memory.db --token \"$NEOFL_GATEWAY_TOKEN\""]
