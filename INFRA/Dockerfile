@@ -12,4 +12,4 @@ ENV NEOFL_REASONING_MODEL=qwen3:8b
 
 EXPOSE 8787
 
-CMD ["python", "/app/python/run_gateway.py", "--host", "0.0.0.0", "--port", "8787", "--token"]
+CMD ["sh", "-c", "python /app/python/run_gateway.py --host 0.0.0.0 --port 8787 --token \"$NEOFL_GATEWAY_TOKEN\""]
