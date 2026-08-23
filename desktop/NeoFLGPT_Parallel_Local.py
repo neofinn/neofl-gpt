@@ -1,16 +1,14 @@
 from __future__ import annotations
-import json, os, sqlite3, threading, time
+import json, os, sqlite3, threading, time, subprocess
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 
-from neofl_gateway.local_brain import LocalBrain, LocalBrainError
+from neofl_gateway.local_brain import LocalBrain
 
 APP=Path(os.getenv('APPDATA','.') )/'NeoFLGPTParallel'
 APP.mkdir(parents=True, exist_ok=True)
 CFG=APP/'config.json'; DB=APP/'memory.db'
-# NeoFLGPT Parallel is the agent/runtime; the underlying local model must be a real model.
-# Qwen3:8b is an actual Ollama model, not a fabricated 'neoflgpt-parallel' model name.
 DEFAULT={'backend':'ollama','model':'qwen3:8b','ollama_url':'http://127.0.0.1:11434','gguf_path':''}
 if not CFG.exists(): CFG.write_text(json.dumps(DEFAULT,indent=2))
 
@@ -41,6 +39,7 @@ class App(tk.Tk):
         bottom=ttk.Frame(self,padding=10);bottom.pack(fill='x')
         self.entry=ttk.Entry(bottom);self.entry.pack(side='left',fill='x',expand=True);self.entry.bind('<Return>',lambda e:self.send())
         ttk.Button(bottom,text='Send',command=self.send).pack(side='left',padx=(8,0))
+        ttk.Button(bottom,text='Install / Repair Local Brain',command=self.install_brain).pack(side='left',padx=(8,0))
         ttk.Button(bottom,text='Brain Settings',command=self.settings).pack(side='left',padx=(8,0))
         self.write('SYSTEM', 'NeoFLGPT Parallel desktop agent started. Local model status is shown above.')
     def write(self,who,text):
@@ -51,6 +50,25 @@ class App(tk.Tk):
             label=('LOCAL BRAIN READY' if ok else 'LOCAL MODEL NOT READY')+' • '+str(s.get('model',''))
             self.after(0,lambda:self.status.config(text=label))
         threading.Thread(target=f,daemon=True).start()
+    def install_brain(self):
+        if os.name!='nt':
+            messagebox.showerror('Windows required','The packaged local Brain installer targets Windows.')
+            return
+        if not messagebox.askyesno('Install Local Brain','This will install/update Ollama if needed and download the real qwen3:8b local model. The model is about 5.2 GB. Continue?'):
+            return
+        self.write('SYSTEM','Starting Local Brain installation. Ollama/model download is in progress...')
+        def work():
+            cmd="irm https://ollama.com/install.ps1 | iex; ollama pull qwen3:8b"
+            try:
+                p=subprocess.run(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-Command',cmd],capture_output=True,text=True,timeout=1800)
+                out=(p.stdout or '')[-4000:]; err=(p.stderr or '')[-2000:]
+                if p.returncode==0:
+                    CFG.write_text(json.dumps(DEFAULT,indent=2));self.brain=LocalBrain(**DEFAULT)
+                    msg='LOCAL BRAIN SETUP COMPLETE\nModel: qwen3:8b\n'+out
+                else: msg='LOCAL BRAIN SETUP FAILED\n'+out+'\n'+err
+            except Exception as e: msg='LOCAL BRAIN SETUP ERROR: '+str(e)
+            self.after(0,lambda:(self.write('SYSTEM',msg),self.refresh_status()))
+        threading.Thread(target=work,daemon=True).start()
     def send(self):
         q=self.entry.get().strip()
         if not q:return
