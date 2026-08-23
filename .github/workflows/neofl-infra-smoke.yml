@@ -23,6 +23,10 @@ jobs:
       - name: Compile gateway modules
         run: python -m compileall -q python
       - name: Validate compose file
+        env:
+          # CI only needs a non-secret placeholder so Compose can resolve
+          # the required variable during static configuration validation.
+          NEOFL_GATEWAY_TOKEN: ci-smoke-token
         run: docker compose -f INFRA/docker-compose.yml config
       - name: Validate required infrastructure files
         run: |
