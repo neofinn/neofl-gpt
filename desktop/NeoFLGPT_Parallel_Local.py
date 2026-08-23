@@ -2,14 +2,16 @@ from __future__ import annotations
 import json, os, sqlite3, threading, time
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, scrolledtext, filedialog, messagebox
+from tkinter import ttk, scrolledtext, messagebox
 
 from neofl_gateway.local_brain import LocalBrain, LocalBrainError
 
 APP=Path(os.getenv('APPDATA','.') )/'NeoFLGPTParallel'
 APP.mkdir(parents=True, exist_ok=True)
 CFG=APP/'config.json'; DB=APP/'memory.db'
-DEFAULT={'backend':'ollama','model':'neoflgpt-parallel','ollama_url':'http://127.0.0.1:11434','gguf_path':''}
+# NeoFLGPT Parallel is the agent/runtime; the underlying local model must be a real model.
+# Qwen3:8b is an actual Ollama model, not a fabricated 'neoflgpt-parallel' model name.
+DEFAULT={'backend':'ollama','model':'qwen3:8b','ollama_url':'http://127.0.0.1:11434','gguf_path':''}
 if not CFG.exists(): CFG.write_text(json.dumps(DEFAULT,indent=2))
 
 def cfg():
