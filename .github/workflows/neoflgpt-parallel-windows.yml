@@ -29,15 +29,13 @@ jobs:
 
       - name: Install build dependencies
         shell: pwsh
-        run: |
-          python -m pip install --upgrade pip pyinstaller
+        run: python -m pip install --upgrade pip pyinstaller
 
       - name: Compile Python sources
         shell: pwsh
         env:
           PYTHONPATH: ${{ github.workspace }}\python
-        run: |
-          python -m compileall -q python desktop
+        run: python -m compileall -q python desktop
 
       - name: Build desktop executable
         shell: pwsh
@@ -64,11 +62,13 @@ jobs:
           NeoFLGPT Parallel
 
           Windows desktop application.
-          Configure a REAL local model backend under Brain Settings.
-          Default backend: Ollama at http://127.0.0.1:11434.
+          Default local backend: Ollama at http://127.0.0.1:11434.
+          Default real local model: qwen3:8b.
 
-          The application explicitly reports LOCAL MODEL NOT READY until a real
-          model is installed. No fake model or fake inference is bundled.
+          Install / Repair Local Brain explicitly installs/repairs Ollama,
+          starts the local Ollama server, waits for readiness, downloads the
+          real qwen3:8b model, and verifies that the model is installed.
+          The application never reports the Brain ready without verification.
           '@ | Set-Content release\README.txt
 
       - name: Install Inno Setup
@@ -81,7 +81,7 @@ jobs:
           @'
           [Setup]
           AppName=NeoFLGPT Parallel
-          AppVersion=1.0.0
+          AppVersion=1.0.1
           DefaultDirName={autopf}\NeoFLGPT Parallel
           DefaultGroupName=NeoFLGPT Parallel
           OutputDir=release
@@ -126,5 +126,5 @@ jobs:
             release\NeoFLGPT_Parallel.exe `
             release\README.txt `
             --title "NeoFLGPT Parallel $tag" `
-            --notes "Verified Windows build of NeoFLGPT Parallel. The installer contains the desktop client. A real local model must be configured/installed before local inference is available." `
+            --notes "Verified Windows build with fixed Ollama startup/readiness and qwen3:8b local model installation. Installer verifies the local Brain before reporting it ready." `
             --target $env:GITHUB_SHA
