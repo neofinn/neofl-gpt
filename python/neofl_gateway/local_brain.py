@@ -1,8 +1,7 @@
 """Local model adapter for the NeoFLGPT Parallel runtime.
 
-This is a real local inference adapter: it talks to an Ollama-compatible
-localhost model server or loads a GGUF model with llama-cpp-python. No remote
-API is required when LOCAL mode is configured and a local model is installed.
+LOCAL mode uses a real Ollama localhost server or an explicit GGUF model.
+No remote model endpoint is implied by this adapter.
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ class LocalBrain:
                  ollama_url: str | None = None, gguf_path: str | None = None,
                  timeout: int = 120) -> None:
         self.backend = (backend or os.getenv("NEOFL_LOCAL_BACKEND", "ollama")).lower()
-        self.model = model or os.getenv("NEOFL_LOCAL_MODEL", "neoflgpt-parallel")
+        self.model = model or os.getenv("NEOFL_LOCAL_MODEL", "qwen3:8b")
         self.ollama_url = (ollama_url or os.getenv("NEOFL_OLLAMA_URL", "http://127.0.0.1:11434")).rstrip("/")
         self.gguf_path = gguf_path or os.getenv("NEOFL_GGUF_MODEL", "")
         self.timeout = timeout
@@ -31,9 +30,7 @@ class LocalBrain:
 
     @property
     def enabled(self) -> bool:
-        if self.backend == "ollama":
-            return bool(self.model)
-        return bool(self.gguf_path)
+        return bool(self.model) if self.backend == "ollama" else bool(self.gguf_path)
 
     def status(self) -> dict[str, Any]:
         if self.backend == "ollama":
@@ -42,14 +39,22 @@ class LocalBrain:
                 if code == 200:
                     tags = json.loads(body).get("models", [])
                     names = [str(x.get("name", "")) for x in tags]
+                    installed = self.model in names or any(
+                        n.split(":", 1)[0] == self.model.split(":", 1)[0] for n in names
+                    )
                     return {"mode": "LOCAL", "backend": "ollama", "online": True,
-                            "model": self.model, "model_installed": self.model in names,
-                            "endpoint": self.ollama_url}
+                            "model": self.model, "model_installed": installed,
+                            "endpoint": self.ollama_url, "models": names}
+                return {"mode": "LOCAL", "backend": "ollama", "online": False,
+                        "model": self.model, "model_installed": False,
+                        "endpoint": self.ollama_url, "error": f"HTTP {code}"}
             except Exception as exc:
                 return {"mode": "LOCAL", "backend": "ollama", "online": False,
-                        "model": self.model, "error": str(exc), "endpoint": self.ollama_url}
-        return {"mode": "LOCAL", "backend": "llama.cpp", "online": Path(self.gguf_path).is_file(),
-                "model": self.gguf_path, "model_installed": Path(self.gguf_path).is_file()}
+                        "model": self.model, "model_installed": False,
+                        "error": str(exc), "endpoint": self.ollama_url}
+        p = Path(self.gguf_path)
+        return {"mode": "LOCAL", "backend": "llama.cpp", "online": p.is_file(),
+                "model": self.gguf_path, "model_installed": p.is_file()}
 
     def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.2,
              max_tokens: int = 2048) -> str:
@@ -59,8 +64,7 @@ class LocalBrain:
             code, body = self._http("/api/chat", payload)
             if code != 200:
                 raise LocalBrainError(f"Ollama HTTP {code}: {body[:500]}")
-            data = json.loads(body)
-            return str(data.get("message", {}).get("content", ""))
+            return str(json.loads(body).get("message", {}).get("content", ""))
         return self._chat_llama(messages, temperature, max_tokens)
 
     def _chat_llama(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
@@ -85,3 +89,5 @@ class LocalBrain:
                 return response.status, response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read().decode("utf-8", errors="replace")
+        except urllib.error.URLError as exc:
+            raise LocalBrainError(f"Ollama unreachable at {self.ollama_url}: {exc.reason}") from exc
