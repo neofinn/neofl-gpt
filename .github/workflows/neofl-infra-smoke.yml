@@ -1,0 +1,34 @@
+name: NeoFL Infrastructure Smoke
+
+on:
+  push:
+    branches: [neoflgpt-parallel]
+    paths:
+      - 'python/**'
+      - 'INFRA/**'
+      - '.github/workflows/neofl-infra-smoke.yml'
+  pull_request:
+    paths:
+      - 'python/**'
+      - 'INFRA/**'
+
+jobs:
+  python-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile gateway modules
+        run: python -m compileall -q python
+      - name: Validate compose file
+        run: docker compose -f INFRA/docker-compose.yml config
+      - name: Validate required infrastructure files
+        run: |
+          test -f INFRA/Dockerfile
+          test -f INFRA/docker-compose.yml
+          test -f INFRA/.env.example
+          test -f python/run_gateway.py
+          test -f python/neofl_gateway/reasoner_router.py
+          test -f python/neofl_gateway/local_memory.py
