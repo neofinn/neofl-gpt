@@ -40,6 +40,23 @@ services:
       - neofl_ollama:/root/.ollama
     ports:
       - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  ollama-init:
+    image: ollama/ollama:latest
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      NEOFL_REASONING_MODEL: ${NEOFL_REASONING_MODEL:-qwen3:8b}
+    entrypoint: ["/bin/sh", "-lc"]
+    command: ["ollama pull \"$${NEOFL_REASONING_MODEL}\""]
 
   gateway:
     build:
@@ -47,8 +64,8 @@ services:
       dockerfile: INFRA/Dockerfile
     restart: unless-stopped
     depends_on:
-      ollama:
-        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
