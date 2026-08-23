@@ -8,6 +8,7 @@ from .agent_runtime import NeoFLAgentRuntime
 from .api import ApiRegistry, StateStore
 from .body import NeoFLBody
 from .brain_registry import BrainDeployment, BrainRegistry
+from .hermes_adapter import HermesAdapter
 from .mcp_client import MCPClient
 from .telemetry import TelemetryRegistry
 from .webhooks import WebhookRegistry
@@ -16,9 +17,9 @@ log = logging.getLogger("neofl.gateway")
 MAX_BODY_BYTES = 256 * 1024
 
 class GatewayHandler(BaseHTTPRequestHandler):
-    server_version = "NeoFL-Gateway/1.6"
+    server_version = "NeoFL-Gateway/1.7"
     api: ApiRegistry; webhooks: WebhookRegistry; store: StateStore; agent: AgentLoop; body: NeoFLBody; runtime: NeoFLAgentRuntime
-    brains: BrainRegistry; telemetry: TelemetryRegistry
+    brains: BrainRegistry; telemetry: TelemetryRegistry; hermes: HermesAdapter
 
     def log_message(self, fmt: str, *args) -> None: log.info("%s - %s", self.address_string(), fmt % args)
     def _send(self, status: int, payload) -> None:
@@ -46,6 +47,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path == "/agent/runtime/status":
             if not self._auth(): self.send_response(401); self.end_headers(); return
             self._send(200,self.runtime.introspect()); return
+        if path == "/agent/hermes/status":
+            if not self._auth(): self.send_response(401); self.end_headers(); return
+            self._send(200,{"hermes":self.hermes.status().__dict__,"doctor":self.hermes.doctor()}); return
+        if path == "/agent/hermes/tools":
+            if not self._auth(): self.send_response(401); self.end_headers(); return
+            self._send(200,{"tools":self.hermes.tool_manifest(),"count":len(self.hermes.tool_manifest())}); return
         endpoint=self.api.get(path)
         if endpoint is None: self._error(404,"not found"); return
         if endpoint.requires_auth and not self._auth(): self.send_response(401); self.end_headers(); return
@@ -111,6 +118,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
             except Exception: log.exception("runtime cycle failed"); self._error(502,"agent runtime cycle failed")
             return
 
+        if path == "/agent/hermes/call":
+            if not self._auth(): self.send_response(401); self.end_headers(); return
+            try:
+                name=str(payload["name"])
+                result=self.hermes.call(name,payload.get("arguments") or {})
+                self._send(200,{"ok":True,"tool":name,"result":result})
+            except (KeyError,PermissionError,ValueError) as exc:
+                self._error(400,str(exc))
+            except Exception:
+                log.exception("Hermes tool call failed")
+                self._error(502,"Hermes tool call failed")
+            return
+
         if path == "/input":
             if not self._auth(): self.send_response(401); self.end_headers(); return
             try:
@@ -131,8 +151,8 @@ def _mcp_client_from_environment():
     return MCPClient(url=url,token=token) if url else None
 
 def make_server(api,webhooks,store,agent,host="127.0.0.1",port=8787):
-    body=NeoFLBody(agent,store); runtime=NeoFLAgentRuntime(agent,_mcp_client_from_environment())
+    body=NeoFLBody(agent,store); mcp=_mcp_client_from_environment(); runtime=NeoFLAgentRuntime(agent,mcp); hermes=HermesAdapter(mcp_client=mcp)
     brains=BrainRegistry([BrainDeployment("MAIN","main",os.getenv("NEOFL_MAIN_BUILD","unknown"),os.getenv("NEOFL_MAIN_BRAIN_URL","")),BrainDeployment("PARALLEL","neoflgpt-parallel",os.getenv("NEOFL_PARALLEL_BUILD","unknown"),os.getenv("NEOFL_PARALLEL_BRAIN_URL", ""))], default=os.getenv("NEOFL_DEFAULT_BRAIN","MAIN"))
     telemetry=TelemetryRegistry()
-    handler=type("BoundGatewayHandler",(GatewayHandler,),{"api":api,"webhooks":webhooks,"store":store,"agent":agent,"body":body,"runtime":runtime,"brains":brains,"telemetry":telemetry})
+    handler=type("BoundGatewayHandler",(GatewayHandler,),{"api":api,"webhooks":webhooks,"store":store,"agent":agent,"body":body,"runtime":runtime,"brains":brains,"telemetry":telemetry,"hermes":hermes})
     return ThreadingHTTPServer((host,port),handler)
