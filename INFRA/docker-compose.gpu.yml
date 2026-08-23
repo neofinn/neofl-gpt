@@ -1,0 +1,50 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - neofl_ollama:/root/.ollama
+    gpus: all
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: INFRA/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    environment:
+      NEOFL_REASONER: ${NEOFL_REASONER:-ollama}
+      NEOFL_OLLAMA_URL: http://ollama:11434
+      NEOFL_REASONING_MODEL: ${NEOFL_REASONING_MODEL:-qwen3:8b}
+      NEOFL_GATEWAY_TOKEN: ${NEOFL_GATEWAY_TOKEN:?Set NEOFL_GATEWAY_TOKEN}
+      NEOFL_SUPABASE_URL: ${NEOFL_SUPABASE_URL:-}
+      NEOFL_SUPABASE_SERVICE_ROLE_KEY: ${NEOFL_SUPABASE_SERVICE_ROLE_KEY:-}
+    ports:
+      - "${GATEWAY_BIND:-127.0.0.1}:${GATEWAY_PORT:-8787}:8787"
+
+  model-init:
+    image: ollama/ollama:latest
+    profiles: ["init"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull ${NEOFL_REASONING_MODEL:-qwen3:8b}"]
+
+volumes:
+  neofl_ollama:
