@@ -1,11 +1,11 @@
-# NeoFLGPT Parallel Windows release build trigger / production desktop client
+# NeoFLGPT Parallel production desktop client
 from __future__ import annotations
-import json, os, sqlite3, threading, time, subprocess
+import json, os, sqlite3, threading, time, subprocess, shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 
-from neofl_gateway.local_brain import LocalBrain
+from neofl_gateway.local_brain import LocalBrain, LocalBrainError
 
 APP=Path(os.getenv('APPDATA','.') )/'NeoFLGPTParallel'
 APP.mkdir(parents=True, exist_ok=True)
@@ -51,25 +51,69 @@ class App(tk.Tk):
             label=('LOCAL BRAIN READY' if ok else 'LOCAL MODEL NOT READY')+' • '+str(s.get('model',''))
             self.after(0,lambda:self.status.config(text=label))
         threading.Thread(target=f,daemon=True).start()
+
+    def _ollama_exe(self):
+        found=shutil.which('ollama')
+        if found:return found
+        candidates=[
+            Path(os.environ.get('LOCALAPPDATA',''))/'Programs/Ollama/ollama.exe',
+            Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Ollama/ollama.exe',
+            Path(os.environ.get('ProgramW6432','C:/Program Files'))/'Ollama/ollama.exe',
+        ]
+        for p in candidates:
+            if p.is_file():return str(p)
+        return None
+
+    def _wait_ollama(self, seconds=45):
+        deadline=time.time()+seconds
+        while time.time()<deadline:
+            try:
+                s=self.brain.status()
+                if s.get('online'):return True
+            except Exception:pass
+            time.sleep(1)
+        return False
+
     def install_brain(self):
         if os.name!='nt':
             messagebox.showerror('Windows required','The packaged local Brain installer targets Windows.')
             return
-        if not messagebox.askyesno('Install Local Brain','This will install/update Ollama if needed and download the real qwen3:8b local model. The model is about 5.2 GB. Continue?'):
+        if not messagebox.askyesno('Install Local Brain','This will install/update Ollama if needed, start the local Ollama service, and download the real qwen3:8b model (about 5.2 GB). Continue?'):
             return
-        self.write('SYSTEM','Starting Local Brain installation. Ollama/model download is in progress...')
+        self.write('SYSTEM','Starting Local Brain installation. Preparing Ollama service...')
         def work():
-            cmd="irm https://ollama.com/install.ps1 | iex; ollama pull qwen3:8b"
             try:
-                p=subprocess.run(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-Command',cmd],capture_output=True,text=True,timeout=1800)
-                out=(p.stdout or '')[-4000:]; err=(p.stderr or '')[-2000:]
-                if p.returncode==0:
-                    CFG.write_text(json.dumps(DEFAULT,indent=2));self.brain=LocalBrain(**DEFAULT)
-                    msg='LOCAL BRAIN SETUP COMPLETE\nModel: qwen3:8b\n'+out
-                else: msg='LOCAL BRAIN SETUP FAILED\n'+out+'\n'+err
-            except Exception as e: msg='LOCAL BRAIN SETUP ERROR: '+str(e)
+                exe=self._ollama_exe()
+                if not exe:
+                    self.after(0,lambda:self.write('SYSTEM','Ollama not found. Installing official Ollama Windows runtime...'))
+                    p=subprocess.run(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-Command','irm https://ollama.com/install.ps1 | iex'],capture_output=True,text=True,timeout=900)
+                    if p.returncode!=0:
+                        raise RuntimeError('Ollama installation failed: '+(p.stderr or p.stdout)[-2000:])
+                    exe=self._ollama_exe()
+                if not exe:raise RuntimeError('Ollama installed but ollama.exe could not be located.')
+
+                # Ollama Desktop may not be running on a fresh server. Start a
+                # local server explicitly and keep it alive independently of GUI.
+                subprocess.Popen([exe,'serve'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                self.after(0,lambda:self.write('SYSTEM','Ollama service starting on http://127.0.0.1:11434 ...'))
+                if not self._wait_ollama(60):
+                    raise RuntimeError('Ollama service did not become reachable at http://127.0.0.1:11434')
+
+                self.after(0,lambda:self.write('SYSTEM','Ollama is online. Pulling real model qwen3:8b...'))
+                p=subprocess.run([exe,'pull','qwen3:8b'],capture_output=True,text=True,timeout=3600)
+                out=(p.stdout or '')[-6000:];err=(p.stderr or '')[-3000:]
+                if p.returncode!=0:raise RuntimeError('Model download failed.\n'+out+'\n'+err)
+
+                CFG.write_text(json.dumps(DEFAULT,indent=2));self.brain=LocalBrain(**DEFAULT)
+                s=self.brain.status()
+                if not (s.get('online') and s.get('model_installed')):
+                    raise RuntimeError('Model pull completed but Ollama does not report qwen3:8b as installed.')
+                msg='LOCAL BRAIN SETUP COMPLETE\nOllama: ONLINE\nModel: qwen3:8b\nThe local Brain is ready for chat.'
+            except Exception as e:msg='LOCAL BRAIN SETUP FAILED\n'+str(e)
             self.after(0,lambda:(self.write('SYSTEM',msg),self.refresh_status()))
         threading.Thread(target=work,daemon=True).start()
+
     def send(self):
         q=self.entry.get().strip()
         if not q:return
@@ -86,7 +130,7 @@ class App(tk.Tk):
         threading.Thread(target=f,daemon=True).start()
     def settings(self):
         w=tk.Toplevel(self);w.title('Local Brain Settings');w.transient(self)
-        c=cfg(); fields={}
+        c=cfg();fields={}
         for i,(k,label) in enumerate([('backend','Backend'),('model','Model'),('ollama_url','Local Ollama URL'),('gguf_path','GGUF Model Path')]):
             ttk.Label(w,text=label).grid(row=i,column=0,padx=10,pady=8,sticky='w');e=ttk.Entry(w,width=55);e.insert(0,c[k]);e.grid(row=i,column=1,padx=10,pady=8);fields[k]=e
         def apply():
