@@ -15,6 +15,7 @@ from neofl_gateway.agent import AgentLoop, sqlite_snapshot_observations
 from neofl_gateway.agentic import AgenticSoul
 from neofl_gateway.api import StateStore, build_default_api
 from neofl_gateway.bridge import Bridge, default_terminal_files
+from neofl_gateway.local_memory import LocalMemory
 from neofl_gateway.normalizers import normalize_cme, normalize_tradingview
 from neofl_gateway.reasoner_router import RoutedReasoner
 from neofl_gateway.server import make_server
@@ -29,12 +30,14 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--token", default=None, help="Bearer token; omit only for local development")
     parser.add_argument("--db", default="neofl.db", help="SQLite path")
+    parser.add_argument("--memory-db", default="neofl_memory.db", help="Local episodic memory SQLite path")
     parser.add_argument("--mt5-files", default=None, help="MQL5/Files directory; auto-detected if omitted")
     parser.add_argument("--poll", type=float, default=2.0, help="MT5 bridge poll seconds")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    memory = SupabaseMemory()
+    supabase = SupabaseMemory()
+    memory = supabase if supabase.enabled else LocalMemory(args.memory_db)
     store = StateStore(memory=memory)
     db = Store(args.db)
     api = build_default_api(store, token=args.token)
@@ -57,10 +60,11 @@ def main() -> int:
             "execution_authorized": False,
             "perception": "MT5 SQLite bridge snapshot",
             "episodic_memory": memory.enabled,
+            "memory_provider": "supabase" if supabase.enabled else "sqlite",
         },
         description="Agentic Soul state, perception, memory and reasoning provider.",
     )
-    api.create("/memory/health", lambda q: memory.status(), description="Durable Supabase memory status.", requires_auth=False)
+    api.create("/memory/health", lambda q: memory.status(), description="Durable episodic memory status.", requires_auth=False)
 
     files = Path(args.mt5_files) if args.mt5_files else default_terminal_files()
     bridge = None
@@ -84,10 +88,10 @@ def main() -> int:
     print(f"  agent input   POST {base}/input")
     print(f"  agent status  {base}/agent/status")
     print(f"  auth          {'Bearer token required' if args.token else 'DISABLED (local only)'}")
-    print(f"  persistence   {'SUPABASE enabled' if memory.enabled else 'local only (configure NEOFL_SUPABASE_URL + service key)'}")
+    print(f"  persistence   {'Supabase + SQLite state' if supabase.enabled else 'local SQLite episodic + SQLite state'}")
     print(f"  reasoner      {reasoner.provider}{(' ' + reasoner.model) if reasoner.model else ''}")
-    print(f"  perception    MT5 latest snapshot via SQLite bridge")
-    print(f"  memory        {'Supabase episodic' if memory.enabled else 'disabled'}")
+    print("  perception    MT5 latest snapshot via SQLite bridge")
+    print(f"  memory        {memory.status().get('provider', 'supabase')}")
     print("  execution     DISABLED — Agentic Soul is recommendation-only")
     print()
     print("  Webhooks:")
