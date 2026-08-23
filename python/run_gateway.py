@@ -15,8 +15,8 @@ from neofl_gateway.agent import AgentLoop, sqlite_snapshot_observations
 from neofl_gateway.agentic import AgenticSoul
 from neofl_gateway.api import StateStore, build_default_api
 from neofl_gateway.bridge import Bridge, default_terminal_files
-from neofl_gateway.llm_reasoner import OpenAIReasoner
 from neofl_gateway.normalizers import normalize_cme, normalize_tradingview
+from neofl_gateway.reasoner_router import RoutedReasoner
 from neofl_gateway.server import make_server
 from neofl_gateway.store import Store
 from neofl_gateway.supabase_memory import SupabaseMemory
@@ -39,7 +39,7 @@ def main() -> int:
     db = Store(args.db)
     api = build_default_api(store, token=args.token)
 
-    reasoner = OpenAIReasoner()
+    reasoner = RoutedReasoner()
     soul = AgenticSoul(reasoner=reasoner)
     agent = AgentLoop(
         soul=soul,
@@ -50,8 +50,9 @@ def main() -> int:
         "/agent/status",
         lambda q: {
             "agentic": True,
-            "reasoner": "openai-responses" if reasoner.enabled else "deterministic-fallback",
-            "model": reasoner.model if reasoner.enabled else None,
+            "reasoner": reasoner.provider,
+            "model": reasoner.model,
+            "reasoner_mode": reasoner.mode,
             "tools": soul.tools.names(),
             "execution_authorized": False,
             "perception": "MT5 SQLite bridge snapshot",
@@ -84,7 +85,7 @@ def main() -> int:
     print(f"  agent status  {base}/agent/status")
     print(f"  auth          {'Bearer token required' if args.token else 'DISABLED (local only)'}")
     print(f"  persistence   {'SUPABASE enabled' if memory.enabled else 'local only (configure NEOFL_SUPABASE_URL + service key)'}")
-    print(f"  reasoner      {'OpenAI ' + reasoner.model if reasoner.enabled else 'deterministic fail-closed fallback'}")
+    print(f"  reasoner      {reasoner.provider}{(' ' + reasoner.model) if reasoner.model else ''}")
     print(f"  perception    MT5 latest snapshot via SQLite bridge")
     print(f"  memory        {'Supabase episodic' if memory.enabled else 'disabled'}")
     print("  execution     DISABLED — Agentic Soul is recommendation-only")
