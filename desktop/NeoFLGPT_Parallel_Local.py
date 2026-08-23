@@ -1,3 +1,4 @@
+# NeoFLGPT Parallel Windows release build trigger / production desktop client
 from __future__ import annotations
 import json, os, sqlite3, threading, time, subprocess
 from pathlib import Path
