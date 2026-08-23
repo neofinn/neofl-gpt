@@ -30,16 +30,34 @@ services:
       timeout: 3s
       retries: 20
 
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    gpus: all
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    volumes:
+      - neofl_ollama:/root/.ollama
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+
   gateway:
     build:
       context: ..
       dockerfile: INFRA/Dockerfile
     restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       NEOFL_GATEWAY_TOKEN: ${NEOFL_GATEWAY_TOKEN:?set NEOFL_GATEWAY_TOKEN}
-      NEOFL_REASONER: ${NEOFL_REASONER:-auto}
+      NEOFL_REASONER: ${NEOFL_REASONER:-ollama}
       NEOFL_REASONING_MODEL: ${NEOFL_REASONING_MODEL:-qwen3:8b}
-      NEOFL_OLLAMA_URL: ${NEOFL_OLLAMA_URL:-http://host.docker.internal:11434}
+      NEOFL_OLLAMA_URL: ${NEOFL_OLLAMA_URL:-http://ollama:11434}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8787}:8787"
@@ -49,4 +67,5 @@ services:
 volumes:
   neofl_postgres:
   neofl_redis:
+  neofl_ollama:
   neofl_gateway_state:
