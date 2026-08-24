@@ -8,6 +8,8 @@ from typing import Any, Callable
 
 from .soul import CognitiveSoul
 from .instrument_classification import classify_instrument
+from .brain_execution import BrainExecutionGateway, BrainExecutionError
+from .mt5_native import MT5NativeConnector
 
 @dataclass
 class AgentRequest:
@@ -38,12 +40,13 @@ class AgentResponse:
     introspection: dict[str, Any] = field(default_factory=dict)
 
 class AgentLoop:
-    """Public gateway into the Soul. It does not own execution authority."""
+    """Public gateway into the Soul with an explicit Brain->MT5 execution boundary."""
     def __init__(self, soul: CognitiveSoul | None = None, context_provider: Callable[[str], list[dict[str, Any]]] | None = None, memory_provider: Callable[[str], list[dict[str, Any]]] | None = None) -> None:
         self.soul = soul or CognitiveSoul()
         self.context_provider = context_provider
         if memory_provider:
             self.soul.memory.provider = memory_provider
+        self.execution = BrainExecutionGateway(MT5NativeConnector())
 
     def handle(self, request: AgentRequest) -> AgentResponse:
         text = request.text.strip()
@@ -71,14 +74,24 @@ class AgentLoop:
             if isinstance(item, dict):
                 state.observations.append(self._observation(item))
         state = self.soul.run(state, context)
+
+        execution_result: dict[str, Any] | None = None
+        if request.mode == "live_trade" and context.get("execution_intent"):
+            execution_result = self.execution.execute(dict(context["execution_intent"]))
+            context["execution_result"] = execution_result
+            context["execution_authorized"] = True
+
         return AgentResponse(
-            request_id=state.request_id, status="accepted", mode=request.mode, routed_brains=routed,
-            answer=self._answer(state, route, context), reasoning_state=state.phase, created_at=time.time(),
-            safety={"execution_authorized": False, "live_trading": False, "broker_order_authority": False, "agentic_loop": True, "soul_authority": True},
+            request_id=state.request_id, status="executed" if execution_result else "accepted", mode=request.mode, routed_brains=routed,
+            answer=self._answer(state, route, context, execution_result), reasoning_state=state.phase, created_at=time.time(),
+            safety={"execution_authorized": bool(execution_result), "live_trading": bool(execution_result), "broker_order_authority": bool(execution_result), "agentic_loop": True, "soul_authority": True},
             instrument_route=route, plan=[asdict(t) for t in state.tasks], observations=[asdict(o) for o in state.observations],
             hypotheses=[asdict(h) for h in state.hypotheses], contradictions=state.contradictions, iterations=state.iteration,
             verdict=state.final_verdict, lessons=state.lessons, introspection=self.soul.introspect(state),
         )
+
+    def observe_live(self, symbol: str) -> dict[str, Any]:
+        return self.execution.observe(symbol)
 
     @staticmethod
     def _observation(item: dict[str, Any]):
@@ -86,11 +99,12 @@ class AgentLoop:
         return Observation(source=str(item.get("source", "external")), claim=str(item.get("claim", "evidence")), value=item.get("value"), quality=str(item.get("quality", "UNKNOWN")), confidence=float(item.get("confidence", 0.0) or 0.0), evidence=[str(x) for x in item.get("evidence", [])])
 
     @staticmethod
-    def _answer(state, route: dict[str, Any] | None, context: dict[str, Any]) -> str:
+    def _answer(state, route: dict[str, Any] | None, context: dict[str, Any], execution_result: dict[str, Any] | None = None) -> str:
         route_text = "" if not route else f" Instrument route: {route['signal_domain']}. {route['reason']}"
         contradiction_text = "" if not state.contradictions else f" Contradictions: {'; '.join(state.contradictions[:3])}."
         memory_text = " Prior episodic memory was supplied." if context.get("memory") or context.get("episodic_memory") else ""
-        return f"Soul completed an agentic cognition cycle for {state.symbol}. Verdict: {state.final_verdict}. {state.final_reason}{route_text}{contradiction_text}{memory_text} No broker execution authority exists in this layer."
+        execution_text = " Live MT5 execution completed and result returned to the Brain." if execution_result else " No broker execution performed."
+        return f"Soul completed an agentic cognition cycle for {state.symbol}. Verdict: {state.final_verdict}. {state.final_reason}{route_text}{contradiction_text}{memory_text}{execution_text}"
 
     @staticmethod
     def to_dict(response: AgentResponse) -> dict[str, Any]:
